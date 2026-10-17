@@ -750,6 +750,7 @@
       for (const e of processIllness(s, rng, false)) msgs.push(e.msg);
     }
     msgs.push(`After ${days} hard days the road came down into the valley.`);
+    s.milesTraveled += LANDMARKS.dalles.dist[0];
     if (s.status !== 'dead') { s.next = 'willamette'; arrive(s); }
     return { ok: true, msgs };
   }
@@ -758,6 +759,7 @@
     const rng = rngFor(s);
     const msgs = [];
     s.day += 4; for (let i = 0; i < 4; i++) eatOneDay(s);
+    s.milesTraveled += LANDMARKS.dalles.dist[0];
     if (hits === 0) msgs.push('You guided the raft down the Columbia without a scratch.');
     for (let i = 0; i < hits && s.status !== 'dead'; i++) {
       if (rng.chance(0.3)) {
