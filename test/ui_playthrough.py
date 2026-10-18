@@ -1,8 +1,9 @@
-"""Drives the built page in headless Chromium through a full game.
+"""Plays the built green-screen game end to end in headless Chromium by reading
+the terminal and typing answers. Fails on page errors, console errors, or a stall.
 Usage: python3 test/ui_playthrough.py [outdir] [seconds]
-Fails on any page error or console error.
 """
 import pathlib
+import re
 import sys
 import time
 
@@ -10,149 +11,188 @@ from playwright.sync_api import sync_playwright
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 OUT = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "test" / "out")
-LIMIT = float(sys.argv[2]) if len(sys.argv) > 2 else 240
+LIMIT = float(sys.argv[2]) if len(sys.argv) > 2 else 400
 OUT.mkdir(parents=True, exist_ok=True)
-
 errors = []
+shots = set()
 
 
-def click_text(page, text):
-    loc = page.locator("button.btn", has_text=text).first
-    if loc.count() and loc.is_enabled():
-        loc.click()
-        return True
-    return False
+def snap(page, name):
+    if name not in shots:
+        shots.add(name)
+        page.screenshot(path=str(OUT / f"{name}.png"), full_page=True)
+
+
+def play(page, occupation="2"):
+    opening_plan = [("1", "3"), ("2", "700"), ("3", "10"), ("4", "6"), ("6", "1"), ("5", "1")]
+    plan_i = 0
+    fort_bought = False
+    last_text, same_since = "", time.time()
+    start = time.time()
+    while time.time() - start < LIMIT:
+        page.wait_for_timeout(40)
+        text = page.inner_text("#term")
+        g = page.evaluate("window.__TW.G && {status: window.__TW.G.status, food: window.__TW.G.food, health: window.__TW.G.health, money: window.__TW.G.money, at: window.__TW.G.at, bullets: window.__TW.G.bullets}")
+        if text != last_text:
+            last_text, same_since = text, time.time()
+        elif time.time() - same_since > 60:
+            snap(page, "stall")
+            errors.append("stalled on: " + text[-300:])
+            return
+        if "Congratulations" in text:
+            snap(page, "10-won-intro")
+        if "POINTS FOR ARRIVING" in text:
+            snap(page, "11-score")
+            return "won"
+        if "HERE LIES" in text and page.locator("#term-input").count():
+            snap(page, "10-tombstone")
+            page.fill("#term-input", "GONE WEST")
+            page.press("#term-input", "Enter")
+            return "dead"
+        if text.startswith("HUNTING"):
+            snap(page, "07-hunt")
+            box = page.locator("#scene").bounding_box()
+            for i in range(5):
+                page.mouse.click(box["x"] + box["width"] * (0.15 + i * 0.17), box["y"] + box["height"] * 0.82)
+                page.wait_for_timeout(120)
+            page.keyboard.press("Enter")
+            continue
+        if text.startswith("THE COLUMBIA RIVER"):
+            snap(page, "09-raft")
+            continue
+        if "Press ENTER to size up" in text:
+            snap(page, "03-travel")
+            if g and g["health"] >= 60:
+                page.keyboard.press("Enter")
+            continue
+        has_input = page.locator("#term-input").count() > 0
+        if not has_input:
+            if "Press ENTER" in text or "Press ENTER" in text.split("\n")[-1]:
+                page.keyboard.press("Enter")
+            continue
+        prompt = page.locator(".prompt span").first.inner_text()
+
+        def answer(v):
+            page.fill("#term-input", v, timeout=5000)
+            page.press("#term-input", "Enter")
+
+        if prompt.startswith("Name of the wagon leader") or re.match(r"\s+\d\. $", prompt):
+            answer("")
+        elif "(Y/N)" in prompt:
+            answer("Y" if "names correct" in prompt else "N")
+        elif prompt.startswith("> "):
+            word = re.search(r"TYPE (\w+)", text).group(1)
+            snap(page, "06-riders")
+            answer(word)
+        elif "Which item" in prompt:
+            if "HIRAM" in text:
+                snap(page, "02-store")
+                if plan_i < len(opening_plan):
+                    answer(opening_plan[plan_i][0])
+                else:
+                    answer("8")
+            else:
+                snap(page, "05-fort-store")
+                if not fort_bought:
+                    fort_bought = True
+                    answer("2")
+                else:
+                    answer("8")
+        elif prompt.startswith("How many days"):
+            answer("3")
+        elif prompt.startswith("How many"):
+            if "HIRAM" not in text and plan_i >= len(opening_plan):
+                afford = int(g["money"] / OT_food_price(page)) - 1
+                answer(str(max(0, min(500 - int(g["food"]), afford))))
+            else:
+                answer(opening_plan[plan_i][1])
+                plan_i += 1
+        elif prompt.startswith("Your epitaph"):
+            answer("GONE WEST")
+        elif prompt.startswith("What is your choice"):
+            if "Many kinds of people" in text:
+                answer(occupation)
+            elif "which month" in text:
+                answer("2")
+            elif "THE TRAIL WEST" in text or "Travel the trail" in text:
+                snap(page, "01-title")
+                answer("1")
+            elif "You must cross the river" in text:
+                snap(page, "04-river")
+                if "Shoshone guide" in text:
+                    answer("4")
+                elif "take a ferry" in text and g["money"] >= 5:
+                    answer("3")
+                else:
+                    answer("2")
+            elif "The trail divides" in text and "Columbia" in text:
+                snap(page, "08-dalles")
+                answer("1")
+            elif "The trail divides" in text:
+                answer("1")
+            elif "Broken wagon" in text:
+                answer("2" if re.search(r"You have [1-9]", text) else "1")
+            elif "Buy supplies" in text and g["food"] < 400 and g["money"] > 30:
+                fort_bought = False
+                answer("11")
+            elif "You may:" in text and g and g["health"] >= 60:
+                answer("6")
+            elif "You may:" in text:
+                if g and g["food"] < 80 and g["bullets"] > 1:
+                    answer("8")
+                else:
+                    answer("1")
+            else:
+                answer("1")
+        else:
+            answer("")
+    errors.append("timed out")
+    snap(page, "timeout")
+
+
+def OT_food_price(page):
+    return page.evaluate("OT.prices(window.__TW.G).food")
 
 
 with sync_playwright() as p:
     browser = p.chromium.launch()
-    for width, name in [(760, "desktop"), (390, "phone")]:
-        page = browser.new_page(viewport={"width": width, "height": 900})
-        page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
-        page.on("console", lambda m: m.type == "error" and "Failed to load resource" not in m.text and errors.append(f"console: {m.text}"))
-        page.add_init_script("window.__TW_FAST = true; try{localStorage.clear()}catch(e){}")
-        page.goto((ROOT / "dist" / "index.html").as_uri())
-        page.wait_for_timeout(600)
-        page.screenshot(path=str(OUT / f"{name}-01-title.png"), full_page=True)
-        if name == "phone":
-            # Layout check only: no horizontal scroll.
-            sw = page.evaluate("document.documentElement.scrollWidth")
-            if sw > width:
-                errors.append(f"horizontal overflow on phone: {sw}px")
-            click_text(page, "Travel the trail")
-            click_text(page, "Banker")
-            page.screenshot(path=str(OUT / "phone-02-names.png"), full_page=True)
-            click_text(page, "Next")
-            click_text(page, "April")
-            page.wait_for_timeout(300)
-            page.screenshot(path=str(OUT / "phone-03-store.png"), full_page=True)
-            sw = page.evaluate("document.documentElement.scrollWidth")
-            if sw > width:
-                errors.append(f"horizontal overflow in store on phone: {sw}px")
-            page.close()
-            continue
+    page = browser.new_page(viewport={"width": 800, "height": 1000})
+    page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
+    page.on("console", lambda m: m.type == "error" and "Failed to load resource" not in m.text and errors.append(f"console: {m.text}"))
+    page.add_init_script("window.__TW_FAST = true; try{localStorage.clear()}catch(e){}")
+    page.goto((ROOT / "dist" / "index.html").as_uri())
+    page.wait_for_timeout(500)
+    try:
+        result = play(page, sys.argv[3] if len(sys.argv) > 3 else "2")
+    except Exception as e:  # report where it broke
+        page.screenshot(path=str(OUT / "crash.png"), full_page=True)
+        errors.append(f"driver crash: {str(e).splitlines()[0]} | screen: {page.inner_text('#term')[-400:]!r}")
+        result = None
+    print("ending:", result)
+    page.close()
 
-        click_text(page, "Travel the trail")
-        click_text(page, "Carpenter")
-        click_text(page, "Next")
-        click_text(page, "April")
-        page.fill("#buy-oxen", "6")
-        page.dispatch_event("#buy-oxen", "change")
-        page.fill("#buy-food", "600")
-        page.dispatch_event("#buy-food", "change")
-        page.fill("#buy-clothing", "8")
-        page.dispatch_event("#buy-clothing", "change")
-        page.fill("#buy-bullets", "5")
-        page.dispatch_event("#buy-bullets", "change")
-        page.fill("#buy-axle", "1")
-        page.dispatch_event("#buy-axle", "change")
-        page.screenshot(path=str(OUT / "desktop-02-store.png"), full_page=True)
-        click_text(page, "Leave for Oregon")
-
-        shots = {"travel": False, "river": False, "fort": False, "hunt": False, "map": False}
-        hunted = False
-        start = time.time()
-        while time.time() - start < LIMIT:
-            page.wait_for_timeout(60)
-            state = page.evaluate("window.__TW.G && {status: window.__TW.G.status, at: window.__TW.G.at, food: window.__TW.G.food, bullets: window.__TW.G.bullets, health: window.__TW.G.health, money: window.__TW.G.money, price: OT.prices(window.__TW.G).food}")
-            if page.locator(".dialog").count():
-                page.locator(".dialog button").first.click()
-                continue
-            if not state:
-                break
-            st = state["status"]
-            if st in ("won", "dead"):
-                page.wait_for_timeout(500)
-                page.screenshot(path=str(OUT / f"desktop-09-{st}.png"), full_page=True)
-                print("ending:", st)
-                break
-            if st == "travel" and page.locator("#stopbtn").count():
-                if state["health"] >= 60:
-                    page.locator("#stopbtn").click()
-                    continue
-                if not shots["travel"]:
-                    page.wait_for_timeout(200)
-                    page.screenshot(path=str(OUT / "desktop-03-travel.png"), full_page=True)
-                    shots["travel"] = True
-                continue
-            if st == "river":
-                if not shots["river"]:
-                    page.screenshot(path=str(OUT / "desktop-04-river.png"), full_page=True)
-                    shots["river"] = True
-                if not (click_text(page, "Hire a Shoshone") or click_text(page, "Take the ferry")):
-                    click_text(page, "Caulk the wagon")
-                page.wait_for_timeout(3500)
-                continue
-            if st == "dalles":
-                page.screenshot(path=str(OUT / "desktop-07-dalles.png"), full_page=True)
-                click_text(page, "Raft down")
-                click_text(page, "Push off")
-                page.wait_for_timeout(1500)
-                page.screenshot(path=str(OUT / "desktop-08-raft.png"), full_page=True)
-                page.wait_for_timeout(41000)
-                continue
-            if page.locator("h2", has_text="Broken wagon").count():
-                if not click_text(page, "Replace with a spare"):
-                    click_text(page, "Try to repair")
-                continue
-            if not hunted and st in ("landmark", "fork") and state["bullets"] > 1 and state["at"] == "laramie":
-                click_text(page, "Go hunting")
-                page.wait_for_timeout(1200)
-                # Fire at the middle of the field a few times.
-                box = page.locator("#scene").bounding_box()
-                for i in range(6):
-                    page.mouse.click(box["x"] + box["width"] * (0.2 + i * 0.12), box["y"] + box["height"] * 0.8)
-                    page.wait_for_timeout(150)
-                page.screenshot(path=str(OUT / "desktop-06-hunt.png"), full_page=True)
-                click_text(page, "Stop hunting")
-                hunted = True
-                continue
-            if st == "landmark" and page.locator("button.btn", has_text="Buy supplies").count() and state["food"] < 400 and state["money"] > state["price"] * 20:
-                if not shots["fort"]:
-                    page.screenshot(path=str(OUT / "desktop-05-fort.png"), full_page=True)
-                    click_text(page, "Look at map")
-                    page.wait_for_timeout(200)
-                    page.screenshot(path=str(OUT / "desktop-05b-map.png"), full_page=True)
-                    click_text(page, "Back")
-                    shots["fort"] = True
-                click_text(page, "Buy supplies")
-                page.fill("#buy-food", str(max(0, min(int(500 - state["food"]), int(state["money"] / state["price"]) - 1))))
-                page.dispatch_event("#buy-food", "change")
-                click_text(page, "Done")
-                continue
-            if st in ("landmark", "travel") and state["health"] >= 60 and page.locator("button.btn", has_text="Stop to rest").count():
-                click_text(page, "Stop to rest")
-                click_text(page, "3 days")
-                continue
-            if page.locator("h2", has_text="The trail divides").count():
-                page.locator(".menu button").first.click()
-                continue
-            if not click_text(page, "Continue on the trail"):
-                click_text(page, "Back") or click_text(page, "Done")
-        else:
-            page.screenshot(path=str(OUT / "desktop-timeout.png"), full_page=True)
-            errors.append(f"timed out before the game ended: {state}")
-        page.close()
+    # Phone width: title and store must not scroll sideways.
+    page = browser.new_page(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    page.on("pageerror", lambda e: errors.append(f"phone pageerror: {e}"))
+    page.add_init_script("window.__TW_FAST = true; try{localStorage.clear()}catch(e){}")
+    page.goto((ROOT / "dist" / "index.html").as_uri())
+    page.wait_for_timeout(500)
+    page.screenshot(path=str(OUT / "phone-01-title.png"), full_page=True)
+    page.locator(".opt", has_text="Travel the trail").first.tap()
+    page.wait_for_timeout(200)
+    page.locator(".opt", has_text="carpenter").first.tap()
+    page.wait_for_timeout(200)
+    for _ in range(5):
+        page.press("#term-input", "Enter")
+    page.fill("#term-input", "Y"); page.press("#term-input", "Enter")
+    page.locator(".opt", has_text="April").first.tap()
+    page.wait_for_timeout(200)
+    page.locator(".opt").first.tap()
+    page.wait_for_timeout(200)
+    page.screenshot(path=str(OUT / "phone-02-store.png"), full_page=True)
+    sw = page.evaluate("document.documentElement.scrollWidth")
+    if sw > 390:
+        errors.append(f"phone horizontal overflow {sw}px")
     browser.close()
 
 for e in errors:

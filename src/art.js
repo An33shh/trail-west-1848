@@ -1,15 +1,17 @@
 /*
  * Procedural pixel art. Every image in the game is drawn here in code.
- * Logical canvas is 320x160, scaled up with nearest-neighbor.
+ * Scenes are composed in color on a 280x160 canvas (Apple II hi-res width),
+ * then reduced to 1-bit green phosphor with a 4x4 ordered dither,
+ * the same way a monochrome monitor showed hi-res graphics.
  */
 (function (root) {
   'use strict';
-  const W = 320, H = 160;
+  const W = 280, H = 160;
 
   // A fixed 256-color-era palette, picked for this remake.
   const P = {
     ink: '#1b1a24', white: '#fbf8ef',
-    skyTop: '#5d8fd6', skyMid: '#8fb7ea', skyLow: '#c7def5',
+    skyTop: '#10141e', skyMid: '#2a3446', skyLow: '#465570',
     duskTop: '#3b3f7a', duskLow: '#e79c6b',
     stormTop: '#4b5568', stormLow: '#8d97a6',
     snowSky: '#aab6c8',
@@ -62,7 +64,7 @@
     else if (weather && /rain/.test(weather.precip || '')) bandedSky(ctx, P.stormTop, P.stormLow, horizon);
     else bandedSky(ctx, P.skyTop, P.skyLow, horizon);
     if (!weather || !weather.precip) {
-      px(ctx, 262, 14, 14, 14, P.sun); px(ctx, 259, 17, 20, 8, P.sun);
+      px(ctx, 232, 14, 14, 14, P.sun); px(ctx, 229, 17, 20, 8, P.sun);
     }
     const o = (offset || 0) * 0.05;
     cloud(ctx, ((40 - o) % 380 + 380) % 380 - 40, 18, 1);
@@ -237,7 +239,7 @@
   }
 
   function landmark(ctx, id, type, t) {
-    const gx = 200, gy = 112;
+    const gx = 170, gy = 112;
     if (type === 'fort') fort(ctx, gx, gy);
     else if (type === 'town' || type === 'dalles') town(ctx, gx - 10, gy);
     else if (id === 'chimney') chimney(ctx, gx + 30, gy);
@@ -425,5 +427,40 @@
     Object.assign(P, save);
   }
 
-  root.Art = { W, H, P, travelScene, landmarkScene, crossingScene, huntScene, raftScene, mapScene, titleScene, ANIMAL_SHAPES };
+  // ---------- Phosphor output ----------
+  // Monochrome hi-res look: shapes get a 1-pixel outline wherever brightness changes,
+  // and areas are filled with one of four fixed patterns (black, sparse dots, checker, solid).
+  const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map((v) => (v + 0.5) / 16);
+  const GREEN = [64, 255, 96];
+  let lumBuf = null;
+  function phosphor(ctx, opts) {
+    opts = opts || {};
+    const lo = opts.lo != null ? opts.lo : 0.42, hi = opts.hi != null ? opts.hi : 0.92, edge = opts.edge != null ? opts.edge : 0.07;
+    const img = ctx.getImageData(0, 0, W, H);
+    const d = img.data;
+    if (!lumBuf || lumBuf.length !== W * H) lumBuf = new Float32Array(W * H);
+    for (let i = 0, j = 0; j < W * H; i += 4, j++) lumBuf[j] = (0.3 * d[i] + 0.59 * d[i + 1] + 0.11 * d[i + 2]) / 255;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const j = y * W + x;
+        const l = lumBuf[j];
+        let on = false;
+        if (opts.edge !== 0) {
+          const r = x + 1 < W ? lumBuf[j + 1] : l;
+          const b = y + 1 < H ? lumBuf[j + W] : l;
+          if (Math.abs(l - r) > edge || Math.abs(l - b) > edge) on = true;
+        }
+        if (!on) {
+          let t = (l - lo) / (hi - lo);
+          t = t <= 0 ? 0 : t < 0.33 ? 0.19 : t < 0.7 ? 0.5 : 1;
+          on = t > BAYER[(y & 3) * 4 + (x & 3)];
+        }
+        const i = j * 4;
+        d[i] = on ? GREEN[0] : 0; d[i + 1] = on ? GREEN[1] : 0; d[i + 2] = on ? GREEN[2] : 0; d[i + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
+  root.Art = { W, H, P, phosphor, travelScene, landmarkScene, crossingScene, huntScene, raftScene, mapScene, titleScene, ANIMAL_SHAPES };
 })(typeof window !== 'undefined' ? window : globalThis);

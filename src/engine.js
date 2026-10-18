@@ -22,15 +22,11 @@
   }
 
   // ---------- Static data ----------
+  // 1985 Apple II rules: three occupations, money and score bonus are the only differences.
   const OCCUPATIONS = [
-    { id: 'banker', name: 'Banker from Boston', cash: 1600, bonus: 1.0, perk: 'None. Money is its own advantage.' },
-    { id: 'doctor', name: 'Doctor from Chicago', cash: 1200, bonus: 1.0, perk: 'Sick travelers recover faster.' },
-    { id: 'merchant', name: 'Merchant from Cincinnati', cash: 1400, bonus: 1.5, perk: 'None.' },
-    { id: 'blacksmith', name: 'Blacksmith from Pittsburgh', cash: 1100, bonus: 2.0, perk: 'Better at fixing broken wagon parts.' },
-    { id: 'carpenter', name: 'Carpenter from Ohio', cash: 800, bonus: 2.0, perk: 'Better at fixing broken wagon parts.' },
-    { id: 'saddlemaker', name: 'Saddlemaker from Kentucky', cash: 900, bonus: 2.5, perk: 'None.' },
-    { id: 'farmer', name: 'Farmer from Illinois', cash: 400, bonus: 3.0, perk: 'Oxen stay healthier.' },
-    { id: 'teacher', name: 'Teacher from Vermont', cash: 400, bonus: 3.5, perk: 'None. The hardest start.' },
+    { id: 'banker', name: 'Be a banker from Boston', cash: 1600, bonus: 1.0, perk: '' },
+    { id: 'carpenter', name: 'Be a carpenter from Ohio', cash: 800, bonus: 2.0, perk: '' },
+    { id: 'farmer', name: 'Be a farmer from Illinois', cash: 400, bonus: 3.0, perk: '' },
   ];
 
   const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -86,7 +82,7 @@
 
   const ILLNESSES = ['exhaustion', 'typhoid', 'cholera', 'measles', 'dysentery', 'a fever'];
   const INJURIES = ['a broken arm', 'a broken leg', 'a snakebite'];
-  const SERIOUS = ['typhoid', 'cholera', 'dysentery', 'measles', 'a snakebite'];
+  const SERIOUS = ['typhoid', 'cholera', 'dysentery', 'measles', 'a snakebite', 'a gunshot wound'];
 
   // Original flavor lines written for this remake.
   const TALK = {
@@ -400,7 +396,7 @@
     const w = s.weather;
     const zone = w.zone;
     const m = dateOf(s).getUTCMonth();
-    const farmer = s.occupation === 'farmer';
+    const farmer = false; // no occupation perks in the 1985 rules
     const ill = 0.022 + s.health * 0.001;
 
     const table = [
@@ -434,6 +430,9 @@
         const part = rng.pick(['wheel', 'axle', 'tongue']);
         s.broken = part;
         return { type: 'broken', msg: `A wagon ${part} broke.`, part };
+      } },
+      { p: (zone === 'plains' || zone === 'highplains' || zone === 'snakeplain') ? 0.004 : 0.0015, fn: () => {
+        return { type: 'riders', msg: 'Riders ahead. They look hostile.' };
       } },
       { p: 0.007, fn: () => {
         const opts = ['food', 'clothing', 'bullets', 'oxen'].filter((k) => s[k] > 0);
@@ -566,7 +565,7 @@
   function repair(s) {
     if (!s.broken) return { ok: false, msg: 'Nothing is broken.' };
     const rng = rngFor(s);
-    const skilled = s.occupation === 'carpenter' || s.occupation === 'blacksmith';
+    const skilled = false;
     s.day += 1; eatOneDay(s); dailyHealth(s, rng, true);
     if (rng.chance(skilled ? 0.6 : 0.3)) {
       const part = s.broken; s.broken = null;
@@ -696,7 +695,7 @@
     s.bullets = Math.max(0, s.bullets - Math.ceil(bulletsFired / 20 * 100) / 100);
     s.bullets = Math.round(s.bullets * 100) / 100;
     const shot = kills.reduce((a, k) => a + (ANIMAL_MEAT[k] || 0), 0);
-    const carry = Math.min(100 + 25 * (alive(s).length - 1), shot);
+    const carry = Math.min(100, shot); // 100 lb cap per hunt
     const room = LIMITS.food - s.food;
     const kept = Math.min(carry, room);
     s.food += kept;
@@ -772,6 +771,31 @@
     return { ok: true, msgs };
   }
 
+  // ---------- Riders (typed BANG shootout, from the 1978 text game) ----------
+  // ms: reaction time to type BANG correctly, or Infinity if mistyped / too slow.
+  function resolveRiders(s, ms) {
+    const rng = rngFor(s);
+    const msgs = [];
+    const used = Math.min(s.bullets, 0.5);
+    s.bullets = Math.round((s.bullets - used) * 100) / 100;
+    if (s.bullets <= 0 && used === 0) ms = Infinity;
+    if (ms < 1500) msgs.push('Nice shooting. The riders turned and ran.');
+    else if (ms < 3500) {
+      msgs.push('Slow shooting, but you drove them off.');
+      if (rng.chance(0.5) && s.food > 0) { const k = Math.min(s.food, rng.int(20, 60)); s.food -= k; msgs.push(`They got away with ${k} pounds of food.`); }
+    } else {
+      msgs.push(ms === Infinity ? 'Your shot went wild.' : 'Too slow.');
+      const r = loseSupplies(s, rng, 0.2, 'The riders raided the wagon.');
+      msgs.push(r);
+      if (rng.chance(0.15)) {
+        const cands = alive(s).filter((p) => !p.leader && !p.ill);
+        if (cands.length) { const p = rng.pick(cands); p.ill = { what: 'a gunshot wound', days: rng.int(8, 14) }; msgs.push(`${p.name} was shot.`); }
+      }
+    }
+    for (const m of msgs) log(s, m);
+    return { msgs };
+  }
+
   // ---------- Score ----------
   function score(s) {
     const living = alive(s);
@@ -796,7 +820,7 @@
     makeRng, OCCUPATIONS, MONTHS, START_MONTHS, BASE_PRICES, LIMITS, ITEM_LABEL, LANDMARKS, ZONES, PACES, RATIONS, TALK,
     HUNT_ANIMALS, ANIMAL_MEAT, BARLOW_TOLL,
     newGame, buy, sell, prices, priceMultiplier, canLeave, depart, travelDay, rest, repair, replacePart,
-    riverWait, crossRiver, finishHunt, huntZone, tradeOffer, acceptTrade, takeBarlow, finishRaft, score,
+    riverWait, crossRiver, finishHunt, huntZone, tradeOffer, acceptTrade, takeBarlow, finishRaft, score, resolveRiders,
     healthLabel, dateString, dateOf, weatherString, alive, occupation, speed,
   };
 

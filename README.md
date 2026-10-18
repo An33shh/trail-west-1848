@@ -1,33 +1,36 @@
 # Trail West 1848
 
-A clean-room browser remake of the 1992 color Macintosh release of The Oregon Trail (often called Oregon Trail Deluxe). Private fan project.
+A clean-room browser remake of The Oregon Trail as it was played on green monochrome screens: the 1985 Apple II game's landmarks, store, rivers and hunting, shown as 1-bit green hi-res pictures above a 40-column text terminal where you type your choices. It also brings back the 1978 text game's shootout, where you type BANG as fast as you can. Private fan project.
 
 Play: open `dist/index.html` in any modern browser. No server, no install.
 
 ## What's in the game
 
-- 8 occupations with starting cash, score multipliers and perks (Doctor, Blacksmith, Carpenter, Farmer)
-- Opening general store plus six forts with rising prices
-- 18 landmarks, 3 forks in the trail, about 1,900 miles
-- Daily weather by terrain zone and month, pace and rations, a party health meter, illness and injury per traveler
-- Random events: broken parts, thieves, storms, blizzards, bad water, lost trail, abandoned wagons, wild fruit
+- Banker ($1600), carpenter ($800, 2x points), farmer ($400, 3x points)
+- Typed numbered menus, typed names and quantities, tappable lines on phones
+- Hiram's General Store with a running bill, six forts with rising prices
+- 18 landmarks, 3 forks, about 1,900 miles; ASCII route map and progress bar
+- Weather by zone and month, pace and rations, party health, illness and injury per traveler
+- Random events, including hostile riders: type the word shown (BANG, BLAM, POW, WHAM) before they close in
 - River crossings: ford, caulk and float, ferry, or a Shoshone guide at the Snake River
-- Point-and-shoot hunting with carry limits
-- Trading and talking to people at landmarks
-- The Dalles: raft the Columbia (dodge-the-rocks mini-game) or pay the Barlow Road toll
-- Final score, Oregon Top Ten, tombstone epitaph on death
+- Hunting with mouse, touch or arrow keys; 100 lb carry limit per hunt
+- The Dalles: raft the Columbia or pay the Barlow Road toll
+- Score table, Oregon Top Ten, ASCII tombstone with your epitaph
 - Autosave and "Continue journey" (stored in the browser)
-- Keyboard, mouse and touch input; works at phone width
+
+## How the pictures work
+
+Scenes are composed in code on a 280x160 canvas (the Apple II hi-res width), then reduced to 1 bit per pixel: a pixel lights up where brightness changes (outlines) or where the area's fill pattern says so. Fills use four fixed patterns (black, sparse dots, checkerboard, solid), the same tricks monochrome hi-res art relied on. Scanlines and glow are CSS on top.
 
 ## Layout
 
 ```
 docs/SPEC.md            mechanics spec, every tunable number, sources
 src/engine.js           pure game rules, no DOM, runs in Node
-src/art.js              all graphics, drawn procedurally on a 320x160 canvas
+src/art.js              all graphics, drawn in code, reduced to 1-bit green
 src/audio.js            square-wave sound and original tunes
-src/ui.js               screens, input, animation
-src/style.css           System 7 style window chrome
+src/ui.js               40-column terminal, typed menus, mini-games
+src/style.css           monitor bezel, phosphor glow, scanlines
 src/body.html           page markup
 tools/build.js          bundles src/ into dist/
 dist/index.html         playable single file
@@ -55,11 +58,10 @@ python3 test/ui_playthrough.py      # end-to-end browser test (needs playwright 
 
 The values most likely to differ from the 1992 release, in priority order:
 
-1. Starting cash for Doctor, Merchant, Blacksmith, Saddlemaker, Teacher
-2. Segment mileages and fort price markups
-3. Event probabilities and the health curve
-4. River depth ranges per crossing and ford/caulk failure odds
-5. Barlow Road toll and duration
+1. Segment mileages and fort price markups
+2. Event probabilities and the health curve
+3. River depth ranges per crossing and ford/caulk failure odds
+4. Barlow Road toll and duration
 
 Observing the original running in an emulator (Basilisk II or Mini vMac with your own copy) and logging numbers per playthrough is the fastest way to close these.
 

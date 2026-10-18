@@ -1,15 +1,12 @@
-<div class="desk">
-  <main class="win" aria-label="Trail West 1848">
-    <div class="titlebar">
-      <span class="box" aria-hidden="true"></span>
-      <span class="tt">Trail West 1848</span>
-      <button id="mute" class="icon-btn" type="button" aria-label="Sound on">♪</button>
+<div class="room">
+  <main class="monitor" aria-label="Trail West 1848">
+    <div class="glass">
+      <canvas id="scene" width="280" height="160" aria-label="Game picture"></canvas>
+      <div id="term" class="term" role="log" aria-live="polite"></div>
     </div>
-    <div class="stage">
-      <canvas id="scene" width="320" height="160" aria-label="Game scene"></canvas>
-      <div id="hud" class="hud" aria-hidden="true"></div>
+    <div class="under">
+      <span><span class="led" aria-hidden="true"></span>TRAIL WEST 1848</span>
+      <button id="mute" type="button">SOUND ON</button>
     </div>
-    <div id="status" class="status" hidden></div>
-    <section id="panel" class="panel" aria-live="polite"></section>
   </main>
 </div>

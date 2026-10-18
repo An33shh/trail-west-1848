@@ -44,7 +44,8 @@ function bot(occ, seed, style) {
         OT.finishHunt(s, 12, kills);
         continue;
       }
-      OT.travelDay(s);
+      const res = OT.travelDay(s);
+      if (res.events.some((e) => e.type === 'riders')) OT.resolveRiders(s, 1000 + (seed % 4) * 1000);
     } else if (s.status === 'river') {
       const lm = OT.LANDMARKS[s.at];
       if (lm.guide && s.clothing >= 3) OT.crossRiver(s, 'guide');

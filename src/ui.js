@@ -1,839 +1,1120 @@
-/* Screens, input and animation. Depends on OT (engine), Art and Sound. */
+/*
+ * Green-screen front end: a 40-column terminal under a hi-res picture.
+ * Choices are typed (a number, a name, BANG) or tapped. Depends on OT, Art, Sound.
+ */
 (function () {
   'use strict';
   const OT = window.OT, Art = window.Art, Sound = window.Sound;
-  const $ = (sel) => document.querySelector(sel);
-  const canvas = $('#scene');
-  const ctx = canvas.getContext('2d');
+  const COLS = 40;
+  const FAST = !!window.__TW_FAST;
+  const canvas = document.getElementById('scene');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   canvas.width = Art.W; canvas.height = Art.H;
-  ctx.imageSmoothingEnabled = false;
+  const termEl = document.getElementById('term');
+  const coarse = matchMedia('(pointer: coarse)').matches;
 
-  const GAME_NAME = 'Trail West 1848';
-  let G = null;            // engine state
-  let anim = null;         // current canvas animation
-  let travelTimer = null;
+  let G = null;
   let frame = 0;
+  let anim = null;
   let travelOffset = 0;
-  const setup = { occupation: 'banker', names: ['', '', '', '', ''], month: 3 };
 
-  // ---------- storage (per-viewer convenience, never required) ----------
+  // ---------- storage, per-viewer convenience only ----------
   const store = {
-    get(k, d) { try { const v = localStorage.getItem('tw1848:' + k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
-    set(k, v) { try { localStorage.setItem('tw1848:' + k, JSON.stringify(v)); } catch (e) { /* storage unavailable */ } },
-    del(k) { try { localStorage.removeItem('tw1848:' + k); } catch (e) { /* ignore */ } },
+    get(k, d) { try { const v = localStorage.getItem('tw1848g:' + k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem('tw1848g:' + k, JSON.stringify(v)); } catch (e) { /* unavailable */ } },
+    del(k) { try { localStorage.removeItem('tw1848g:' + k); } catch (e) { /* unavailable */ } },
   };
-  function autosave() { if (G && G.status !== 'won' && G.status !== 'dead') store.set('save', G); }
+  const autosave = () => { if (G && G.status !== 'won' && G.status !== 'dead') store.set('save', G); };
 
-  // ---------- animation loop ----------
+  // ---------- picture ----------
   function loop() {
     requestAnimationFrame(loop);
     frame++;
     if (!anim) return;
-    try { anim(frame); } catch (e) { console.error(e); anim = null; }
+    try { anim(frame); Art.phosphor(ctx); } catch (e) { console.error(e); anim = null; }
   }
   requestAnimationFrame(loop);
-  function setAnim(fn) { anim = fn; }
+  function picture(fn) { anim = fn; canvas.hidden = !fn; }
 
-  function sceneFor() {
-    if (!G) return;
-    if (G.status === 'travel') {
-      const zone = OT.LANDMARKS[G.next].zone;
-      return () => Art.travelScene(ctx, { zone, weather: G.weather, offset: travelOffset, frame: travelTimer ? frame : 0, oxen: G.oxen });
-    }
-    const id = G.at;
-    return (f) => Art.landmarkScene(ctx, { id, landmark: OT.LANDMARKS[id], weather: G.weather, frame: f, oxen: G.oxen, river: G.river });
+  function landmarkPicture(id) {
+    const lm = OT.LANDMARKS[id];
+    picture((f) => Art.landmarkScene(ctx, { id, landmark: lm, weather: G.weather, frame: f, oxen: G.oxen, river: G.river }));
   }
 
-  // ---------- small DOM helpers ----------
-  function h(tag, attrs, ...kids) {
-    const el = document.createElement(tag);
-    for (const k in attrs || {}) {
-      if (k === 'class') el.className = attrs[k];
-      else if (k.startsWith('on')) el.addEventListener(k.slice(2), attrs[k]);
-      else if (k === 'html') el.innerHTML = attrs[k];
-      else if (attrs[k] !== false && attrs[k] != null) el.setAttribute(k, attrs[k] === true ? '' : attrs[k]);
+  // ---------- terminal ----------
+  // Size the font so exactly 40 columns fit the glass, whatever face loaded.
+  function fitTerm() {
+    const probe = document.createElement('span');
+    probe.textContent = 'M'.repeat(COLS);
+    probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;font-size:100px;font-family:inherit';
+    termEl.append(probe);
+    const per100 = probe.getBoundingClientRect().width;
+    probe.remove();
+    const avail = termEl.clientWidth;
+    if (per100 > 0 && avail > 0) termEl.style.fontSize = Math.floor((avail / per100) * 100 * 0.995 * 10) / 10 + 'px';
+  }
+  fitTerm();
+  window.addEventListener('resize', fitTerm);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitTerm);
+
+  function wrap(text, width) {
+    const out = [];
+    for (const para of String(text).split('\n')) {
+      if (!para) { out.push(''); continue; }
+      let line = '';
+      for (const word of para.split(' ')) {
+        if (!line) line = word;
+        else if ((line + ' ' + word).length <= width) line += ' ' + word;
+        else { out.push(line); line = word; }
+      }
+      out.push(line);
     }
-    for (const c of kids.flat()) if (c != null && c !== false) el.append(c.nodeType ? c : document.createTextNode(String(c)));
+    return out;
+  }
+
+  const T = {
+    clear() { termEl.replaceChildren(); },
+    line(text, cls) {
+      const d = document.createElement('div');
+      d.className = 'line' + (cls ? ' ' + cls : '');
+      d.textContent = text;
+      termEl.append(d);
+      return d;
+    },
+    say(text, cls) { for (const l of wrap(text, COLS)) T.line(l, cls); },
+    blank() { T.line(''); },
+    art(text) {
+      const d = document.createElement('div');
+      d.className = 'line art';
+      d.textContent = text.replace(/^\n/, '').replace(/\s+$/, '');
+      termEl.append(d);
+    },
+    center(text, cls) { T.line(' '.repeat(Math.max(0, Math.floor((COLS - text.length) / 2))) + text, cls); },
+    rule() { T.line('-'.repeat(COLS), 'dim'); },
+    pair(label, value) { T.line(`${label}`.padEnd(20) + `${value}`); },
+  };
+
+  let pending = null; // the one active prompt
+  function cancelPending() { if (pending) { pending.cleanup(); pending = null; } }
+
+  // Free-text prompt. Resolves with the typed string.
+  function ask(promptText, opts) {
+    opts = opts || {};
+    cancelPending();
+    return new Promise((resolve) => {
+      const row = document.createElement('div');
+      row.className = 'prompt';
+      const label = document.createElement('span');
+      label.textContent = promptText;
+      const input = document.createElement('input');
+      input.id = 'term-input';
+      input.autocomplete = 'off';
+      input.spellcheck = false;
+      input.setAttribute('autocapitalize', 'characters');
+      input.setAttribute('aria-label', promptText.trim());
+      if (opts.maxLength) input.maxLength = opts.maxLength;
+      if (opts.numeric) input.inputMode = 'numeric';
+      if (opts.placeholder) input.placeholder = opts.placeholder;
+      row.append(label, input);
+      termEl.append(row);
+      const focusIt = () => input.focus({ preventScroll: true });
+      if (!coarse || opts.forceFocus) focusIt();
+      row.scrollIntoView({ block: 'nearest' });
+      const done = (val) => { cleanup(); pending = null; row.replaceWith(Object.assign(document.createElement('div'), { className: 'line', textContent: promptText + val })); resolve(val); };
+      const onKey = (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); Sound.unlock(); done(input.value.trim()); }
+        else if (opts.instant && /^[0-9]$/.test(e.key) && !input.value) {
+          const n = Number(e.key);
+          if (opts.instant(n)) { e.preventDefault(); e.stopPropagation(); Sound.unlock(); done(e.key); }
+        }
+      };
+      const onTermClick = () => focusIt();
+      input.addEventListener('keydown', onKey);
+      termEl.addEventListener('click', onTermClick);
+      function cleanup() { input.removeEventListener('keydown', onKey); termEl.removeEventListener('click', onTermClick); }
+      pending = { cleanup, submit: done };
+    });
+  }
+
+  // A tappable terminal line that submits a number to the active prompt.
+  function option(text, n) {
+    const el = T.line(text, 'opt');
+    el.tabIndex = 0;
+    el.setAttribute('role', 'button');
+    const go = () => { if (pending) { Sound.unlock(); Sound.click(); pending.submit(String(n)); } };
+    el.addEventListener('click', (e) => { e.stopPropagation(); go(); });
+    el.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); go(); } });
     return el;
   }
-  function btn(label, onclick, opts) {
-    opts = opts || {};
-    const b = h('button', { class: 'btn' + (opts.primary ? ' primary' : '') + (opts.on ? ' on' : ''), type: 'button', disabled: opts.disabled, id: opts.id }, label, opts.sub ? h('small', null, opts.sub) : null);
-    b.addEventListener('click', () => { Sound.unlock(); Sound.click(); onclick(); });
-    return b;
+
+  // Prompt until one of nums is typed or tapped.
+  async function pick(nums, promptText) {
+    for (;;) {
+      const v = await ask(promptText || 'What is your choice? ', { maxLength: 2, numeric: true, instant: nums.length < 10 ? (n) => nums.includes(n) : null });
+      const n = parseInt(v, 10);
+      if (nums.includes(n)) { Sound.click(); return n; }
+      Sound.bad();
+    }
   }
-  function panel(...kids) {
-    const p = $('#panel');
-    p.replaceChildren(...kids.flat().filter(Boolean));
-    const first = p.querySelector('button:not([disabled]), input');
-    if (first && !matchMedia('(pointer: coarse)').matches) first.focus({ preventScroll: true });
+
+  // Numbered menu. Null entries are skipped but keep their number. Resolves with the index.
+  async function choose(options, promptText) {
+    const nums = [];
+    options.forEach((o, i) => { if (o != null) { nums.push(i + 1); option(`  ${i + 1}. ${o}`, i + 1); } });
+    T.blank();
+    return (await pick(nums, promptText)) - 1;
   }
+
+  // Wait for Enter, Space, or a tap.
+  function pause(text) {
+    cancelPending();
+    return new Promise((resolve) => {
+      const el = T.line('', 'opt');
+      el.append(document.createTextNode(text || 'Press ENTER to continue'), Object.assign(document.createElement('span'), { className: 'cursor', textContent: ' ' }));
+      el.tabIndex = 0;
+      el.setAttribute('role', 'button');
+      el.scrollIntoView({ block: 'nearest' });
+      const finish = () => { cleanup(); pending = null; el.remove(); Sound.unlock(); resolve(); };
+      const onKey = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); finish(); } };
+      const onClick = () => finish();
+      window.addEventListener('keydown', onKey);
+      termEl.addEventListener('click', onClick);
+      canvas.addEventListener('click', onClick);
+      function cleanup() { window.removeEventListener('keydown', onKey); termEl.removeEventListener('click', onClick); canvas.removeEventListener('click', onClick); }
+      pending = { cleanup, submit: finish };
+    });
+  }
+
+  async function yesNo(q) {
+    for (;;) {
+      const v = (await ask(q + ' ', { maxLength: 3 })).toUpperCase();
+      if (v.startsWith('Y')) return true;
+      if (v.startsWith('N')) return false;
+      Sound.bad();
+    }
+  }
+
+  async function number(q, max) {
+    for (;;) {
+      const v = await ask(q, { maxLength: 5, numeric: true, forceFocus: true });
+      if (v === '') return 0;
+      const n = parseInt(v, 10);
+      if (Number.isFinite(n) && n >= 0 && n <= max) return n;
+      Sound.bad();
+      T.say(`Enter a number from 0 to ${max}.`, 'dim');
+    }
+  }
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, FAST ? 0 : ms));
   const money = (n) => '$' + n.toFixed(2);
-  const lbs = (n) => Math.floor(n) + ' lb';
   const rounds = (boxes) => Math.floor(boxes * 20);
+  const paceName = () => OT.PACES.find((p) => p.id === G.pace).name.toLowerCase();
+  const ratName = () => OT.RATIONS.find((r) => r.id === G.rations).name.toLowerCase();
 
-  function dialog(messages, onClose, opts) {
-    opts = opts || {};
-    const msgs = (Array.isArray(messages) ? messages : [messages]).filter(Boolean);
-    if (!msgs.length) { onClose && onClose(); return; }
-    const scrim = h('div', { class: 'dialog-scrim' });
-    const close = () => { scrim.remove(); onClose && onClose(); };
-    const ok = h('button', { class: 'btn primary', type: 'button' }, opts.button || 'OK');
-    ok.addEventListener('click', () => { Sound.click(); close(); });
-    scrim.append(h('div', { class: 'dialog', role: 'alertdialog', 'aria-live': 'assertive' },
-      h('div', { class: 'icon', 'aria-hidden': 'true' }, opts.icon || '!'),
-      ...msgs.map((m) => h('p', null, m)),
-      h('div', { class: 'row end' }, ok)));
-    $('.win').append(scrim);
-    ok.focus({ preventScroll: true });
+  // ---------- ASCII art (drawn for this remake) ----------
+  const BANNER = String.raw`
+ _____  ___    _    ___  _
+|_   _|| _ \  /_\  |_ _|| |
+  | |  |   / / _ \  | | | |__
+  |_|  |_|_\/_/ \_\|___||____|
+ __      __ ___  ___  _____
+ \ \    / /| __|/ __||_   _|
+  \ \/\/ / | _| \__ \  | |
+   \_/\_/  |___||___/  |_|    1848`;
+
+  const WAGON = String.raw`
+        ___________
+      /'           '\
+     /   _   _   _   \__   ___  ___
+    |___________________|=|o__||o__|
+     (_)           (_)     "" ""  ""`;
+
+  function tombstone(name, epitaph, date) {
+    const inner = 24;
+    const c = (t) => { t = String(t).slice(0, inner); const l = Math.floor((inner - t.length) / 2); return '|' + ' '.repeat(l) + t + ' '.repeat(inner - t.length - l) + '|'; };
+    return [
+      '       ' + '_'.repeat(inner - 6),
+      '     /' + ' '.repeat(inner - 2) + '\\',
+      '    ' + c(''),
+      '    ' + c('HERE LIES'),
+      '    ' + c(name.toUpperCase()),
+      '    ' + c(''),
+      '    ' + c(epitaph || ''),
+      '    ' + c(''),
+      '    ' + c(date),
+      ' ' + '"'.repeat(inner + 8),
+    ].join('\n');
   }
 
-  function hud(left, right) {
-    const el = $('#hud');
-    el.replaceChildren(h('span', null, left || ''), h('span', null, right || ''));
+  function progressBar() {
+    const total = 1907;
+    const width = 30;
+    const f = Math.min(1, G.milesTraveled / total);
+    const n = Math.round(f * width);
+    return '[' + '='.repeat(Math.max(0, n - 1)) + (n ? '>' : '') + ' '.repeat(width - n) + ']';
   }
 
-  function renderStatus() {
-    const s = $('#status');
-    if (!G || G.status === 'store' && G.day === 0) { s.hidden = true; return; }
-    s.hidden = false;
-    const hl = OT.healthLabel(G.health);
-    const cls = { good: 'h-good', fair: 'h-fair', poor: 'h-poor', 'very poor': 'h-very' }[hl];
-    const nextLine = G.next ? `${OT.LANDMARKS[G.next].name.replace(' Crossing', '')}, ${G.milesToNext} mi` : OT.LANDMARKS[G.at].name;
-    const cells = [
-      ['Date', OT.dateString(G)],
-      ['Weather', OT.weatherString(G.weather)],
-      ['Health', hl],
-      ['Food', lbs(G.food)],
-      [G.next ? 'Next landmark' : 'Location', nextLine],
-      ['Miles traveled', G.milesTraveled],
-    ];
-    s.replaceChildren(...cells.map(([k, v], i) => h('div', null, h('b', null, k), h('span', { class: i === 2 ? cls : '' }, v))));
+  // Route as a vertical ASCII chart: past, current, and the road ahead.
+  function routeLines() {
+    const lines = [];
+    const visited = new Set(G.path);
+    let id = 'independence';
+    let miles = 0;
+    const seen = new Set();
+    while (id && !seen.has(id)) {
+      seen.add(id);
+      const lm = OT.LANDMARKS[id];
+      const here = !G.next && G.at === id;
+      const mark = here ? '@' : visited.has(id) ? '*' : '.';
+      lines.push(` ${mark} ${lm.name.replace(' Crossing', '').replace(', Missouri', '').replace(', Oregon', '').padEnd(24)}${String(miles).padStart(5)}`);
+      if (G.next && G.path[G.path.length - 1] === id) lines.push(`   :  ${G.segmentLength - G.milesToNext} of ${G.segmentLength} miles  <- you`);
+      if (!lm.next.length) break;
+      // Follow the branch actually taken, otherwise the first branch.
+      let idx = lm.next.findIndex((n) => visited.has(n) || n === G.next);
+      if (idx < 0) idx = 0;
+      if (lm.next.length > 1 && !visited.has(lm.next[idx]) && G.next !== lm.next[idx]) lines.push(`   :  (fork: ${lm.next.map((n) => OT.LANDMARKS[n].name.split(' ').slice(-2).join(' ')).join(' / ')})`);
+      miles += lm.dist[idx];
+      id = lm.next[idx];
+    }
+    return lines;
   }
 
   // ---------- Title ----------
-  function title() {
-    stopTravel();
+  async function title() {
+    cancelPending();
     G = null;
-    renderStatus();
-    hud('', '');
-    setAnim((f) => Art.titleScene(ctx, f));
-    const saved = store.get('save', null);
-    panel(
-      h('div', { class: 'eyebrow' }, 'Independence, Missouri to the Willamette Valley'),
-      h('h1', null, GAME_NAME),
-      h('p', null, 'Lead a wagon party of five across 2,000 miles of prairie, desert and mountains before the snow closes the passes.'),
-      h('div', { class: 'menu' },
-        saved ? btn('Continue journey', () => resume(saved), { primary: true, sub: `${saved.party[0].name}'s party, ${OT.dateString(saved)}` }) : null,
-        btn('Travel the trail', () => { Sound.title(); chooseOccupation(); }, { primary: !saved }),
-        btn('Learn about the trail', learn),
-        btn('See the Oregon Top Ten', topTen),
-      ),
-      h('p', { class: 'muted' }, 'A clean-room fan remake. All art, sound and writing are original. Keyboard, mouse and touch all work.'),
-    );
+    for (;;) {
+      picture((f) => Art.titleScene(ctx, f));
+      T.clear();
+      T.art(BANNER);
+      T.blank();
+      T.say('You may:');
+      const saved = store.get('save', null);
+      const opts = [
+        'Travel the trail',
+        'Learn about the trail',
+        'See the Oregon Top Ten',
+        `Turn sound ${Sound.muted ? 'on' : 'off'}`,
+        saved ? `Continue ${saved.party[0].name}'s journey` : null,
+      ];
+      const c = await choose(opts);
+      if (c === 0) { Sound.title(); return setup(); }
+      if (c === 1) await learn();
+      if (c === 2) await topTen();
+      if (c === 3) toggleSound();
+      if (c === 4) { G = saved; return resume(); }
+    }
   }
 
-  function resume(saved) {
-    G = saved;
-    if (G.status === 'travel') stopMenu(); else landmarkMenu();
+  function toggleSound() {
+    const m = Sound.toggle();
+    document.getElementById('mute').textContent = m ? 'SOUND OFF' : 'SOUND ON';
   }
 
-  function learn() {
-    panel(
-      h('h2', null, 'How the trail works'),
-      h('p', null, 'You choose an occupation, outfit a wagon in Independence, then travel landmark to landmark. Rivers must be crossed, forts sell supplies at rising prices, and the weather turns against you as the months go by.'),
-      h('p', null, 'Pace and rations are the two levers. A grueling pace and bare-bones meals cover ground fast but wear people down until they sicken. Rest at landmarks to recover.'),
-      h('p', null, 'Arrive with people in good health, a full wagon and money left over for a high score. Poorer occupations multiply their score: a farmer earns triple, a teacher three and a half times.'),
-      h('p', null, 'Hunting: tap or click animals to shoot. Each shot costs one bullet, and you can only carry so much meat back to the wagon.'),
-      h('div', { class: 'row' }, btn('Back', title, { primary: true })),
-    );
+  async function learn() {
+    const pages = [
+      'Try taking a journey by covered wagon across 2000 miles of plains, rivers, and mountains. Try! On the plains, will you slosh your oxen through mud and water-filled ruts or will you plod through dust six inches deep?',
+      'You will need to buy oxen, food, clothing, bullets and spare parts before you leave Independence, Missouri. Prices rise at every fort along the way.',
+      'Pace and rations decide how fast you go and how fast your party wears out. Rest when health turns poor. Rivers can be forded, floated, or crossed by ferry if you can pay.',
+      'Riders may block the trail. When told, type the word on the screen as fast as you can and press ENTER. Speed decides the outcome.',
+      'You score points for every survivor, for supplies and money left over. A carpenter earns double points and a farmer earns triple.',
+    ];
+    picture(null);
+    for (const p of pages) {
+      T.clear();
+      T.center('THE TRAIL WEST');
+      T.rule();
+      T.say(p);
+      T.blank();
+      await pause();
+    }
   }
 
   const LEGENDS = [
     ['Narcissa W.', 7650], ['Jesse A.', 6200], ['Tabitha B.', 5400], ['Peter B.', 4100], ['Marcus W.', 3200],
     ['Ezra M.', 2600], ['Nancy H.', 1900], ['Elijah W.', 1300], ['Lucy T.', 800], ['Jason L.', 400],
   ];
-  function topTenList() {
+  const rating = (sc) => (sc >= 7000 ? 'Trail guide' : sc >= 3000 ? 'Adventurer' : sc >= 1000 ? 'Settler' : 'Greenhorn');
+
+  async function topTen() {
     const mine = store.get('top', []);
-    return LEGENDS.map(([n, s]) => ({ name: n, score: s, legend: true })).concat(mine).sort((a, b) => b.score - a.score).slice(0, 10);
+    const list = LEGENDS.map(([name, score]) => ({ name, score })).concat(mine).sort((a, b) => b.score - a.score).slice(0, 10);
+    picture(null);
+    T.clear();
+    T.center('THE OREGON TOP TEN');
+    T.blank();
+    T.line('Name'.padEnd(16) + 'Points'.padStart(8) + '  Rating', 'dim');
+    T.rule();
+    for (const r of list) T.line(r.name.slice(0, 15).padEnd(16) + String(r.score).padStart(8) + '  ' + rating(r.score));
+    T.blank();
+    T.say('Scores are kept in this browser.', 'dim');
+    await pause();
   }
-  function topTen() {
-    const list = topTenList();
-    panel(
-      h('h2', null, 'The Oregon Top Ten'),
-      h('div', { class: 'scroll-x' }, h('table', { class: 'sheet' },
-        h('thead', null, h('tr', null, h('th', null, 'Name'), h('th', { class: 'n' }, 'Points'), h('th', null, 'Rating'))),
-        h('tbody', null, list.map((r) => h('tr', null, h('td', null, r.name), h('td', { class: 'n' }, r.score), h('td', null, rating(r.score))))))),
-      h('p', { class: 'muted' }, 'Scores are kept in this browser only.'),
-      h('div', { class: 'row' }, btn('Back', title, { primary: true })),
-    );
-  }
-  function rating(sc) { return sc >= 7000 ? 'Trail guide' : sc >= 3000 ? 'Adventurer' : sc >= 1000 ? 'Settler' : 'Greenhorn'; }
 
   // ---------- Setup ----------
-  function chooseOccupation() {
-    setAnim((f) => Art.titleScene(ctx, f));
-    panel(
-      h('div', { class: 'eyebrow' }, 'Step 1 of 3'),
-      h('h2', null, 'Many kinds of people made the trip. What will you be?'),
-      h('div', { class: 'menu' }, OT.OCCUPATIONS.map((o) => btn(o.name, () => { setup.occupation = o.id; chooseNames(); }, {
-        sub: `$${o.cash} · ${o.bonus === 1 ? 'no bonus' : 'score x' + o.bonus} · ${o.perk}`,
-      }))),
-      h('div', { class: 'row' }, btn('Back', title)),
-    );
-  }
+  async function setup() {
+    picture((f) => Art.titleScene(ctx, f));
+    let occ;
+    for (;;) {
+      T.clear();
+      T.say('Many kinds of people made the trip to Oregon.');
+      T.blank();
+      T.say('You may:');
+      const c = await choose(['Be a banker from Boston', 'Be a carpenter from Ohio', 'Be a farmer from Illinois', 'Find out the differences between these choices']);
+      if (c < 3) { occ = OT.OCCUPATIONS[c]; break; }
+      T.clear();
+      T.say('Traveling to Oregon isn\'t easy! But if you\'re a banker, you\'ll have more money for supplies and services than a carpenter or a farmer.');
+      T.blank();
+      T.say('However, the harder you have to try, the more points you deserve! The farmer earns triple points and the carpenter earns double.');
+      T.blank();
+      await pause();
+    }
 
-  function chooseNames() {
-    const labels = ['Wagon leader', 'Traveler 2', 'Traveler 3', 'Traveler 4', 'Traveler 5'];
     const defaults = ['Abigail', 'Thomas', 'Ruth', 'Samuel', 'Clara'];
-    const inputs = labels.map((l, i) => h('input', { id: 'name' + i, maxlength: 14, value: setup.names[i] || defaults[i], autocomplete: 'off' }));
-    panel(
-      h('div', { class: 'eyebrow' }, 'Step 2 of 3'),
-      h('h2', null, 'Who is traveling with you?'),
-      h('div', { class: 'names' }, labels.map((l, i) => h('label', { for: 'name' + i }, l, inputs[i]))),
-      h('div', { class: 'row' }, btn('Back', chooseOccupation), btn('Next', () => {
-        setup.names = inputs.map((x, i) => x.value.trim() || defaults[i]);
-        chooseMonth();
-      }, { primary: true })),
-    );
+    let names;
+    for (;;) {
+      T.clear();
+      names = [];
+      const first = await ask('Name of the wagon leader? ', { maxLength: 12, placeholder: defaults[0], forceFocus: true });
+      names.push(first || defaults[0]);
+      T.blank();
+      T.say('What are the first names of the four other members in your party?');
+      for (let i = 1; i < 5; i++) {
+        const n = await ask(`  ${i + 1}. `, { maxLength: 12, placeholder: defaults[i], forceFocus: true });
+        names.push(n || defaults[i]);
+      }
+      names = names.map((n) => n.charAt(0).toUpperCase() + n.slice(1).toLowerCase());
+      T.blank();
+      if (await yesNo('Are these names correct? (Y/N)')) break;
+    }
+
+    let month;
+    for (;;) {
+      T.clear();
+      T.say('It is 1848. Your jumping off place for Oregon is Independence, Missouri. You must decide which month to leave Independence.');
+      T.blank();
+      const c = await choose(['March', 'April', 'May', 'June', 'July', 'Ask for advice']);
+      if (c < 5) { month = OT.START_MONTHS[c]; break; }
+      T.clear();
+      T.say('You attend a public meeting held for "folks with the California - Oregon fever." You\'re told:');
+      T.blank();
+      T.say('If you leave too early, there won\'t be any grass for your oxen to eat. If you leave too late, you may not get to Oregon before winter comes. If you leave at just the right time, there will be green grass and the weather will still be cool.');
+      T.blank();
+      await pause();
+    }
+
+    G = OT.newGame({ occupation: occ.id, names, month });
+    T.clear();
+    T.say(`Before leaving Independence you should buy equipment and supplies. You have ${money(G.money)} in cash, but you don't have to spend it all now.`);
+    T.blank();
+    T.say('You can buy whatever you need at Hiram\'s General Store.');
+    T.blank();
+    await pause();
+    await shop(true);
+    G.status = 'landmark';
+    autosave();
+    T.clear();
+    landmarkPicture('independence');
+    T.say(`Well then, you're ready to start. Good luck! You have a long and difficult journey ahead of you.`);
+    T.blank();
+    await pause();
+    OT.depart(G, 0);
+    return travel();
   }
 
-  function chooseMonth() {
-    const notes = {
-      2: 'Early. Grass is thin and nights are cold.',
-      3: 'The usual choice. Rivers run high.',
-      4: 'Good grass, warm days.',
-      5: 'Hot plains, little margin before snow.',
-      6: 'Very late. Expect snow in the mountains.',
-    };
-    panel(
-      h('div', { class: 'eyebrow' }, 'Step 3 of 3'),
-      h('h2', null, 'When will you leave Independence?'),
-      h('div', { class: 'menu' }, OT.START_MONTHS.map((m) => btn(OT.MONTHS[m], () => { setup.month = m; startGame(); }, { sub: notes[m], on: m === 3 }))),
-      h('div', { class: 'row' }, btn('Back', chooseNames)),
-    );
-  }
-
-  function startGame() {
-    G = OT.newGame({ occupation: setup.occupation, names: setup.names, month: setup.month });
-    shop(true);
+  async function resume() {
+    if (G.status === 'travel') return sizeUp();
+    return landmark(false);
   }
 
   // ---------- Store ----------
   const ITEMS = [
-    ['oxen', 'Oxen', 'sold in yokes of 2', 2],
-    ['food', 'Food', 'pounds', 50],
-    ['clothing', 'Clothing', 'sets', 1],
-    ['bullets', 'Bullets', 'boxes of 20', 1],
-    ['wheel', 'Wagon wheels', 'spares', 1],
-    ['axle', 'Wagon axles', 'spares', 1],
-    ['tongue', 'Wagon tongues', 'spares', 1],
+    ['oxen', 'Oxen'], ['food', 'Food'], ['clothing', 'Clothing'], ['bullets', 'Ammunition'], ['wheel', 'Spare wheels'], ['axle', 'Spare axles'], ['tongue', 'Spare tongues'],
   ];
+  const ITEM_HELP = {
+    oxen: (p) => `There are 2 oxen in a yoke. I recommend at least 3 yoke. I charge ${money(p * 2)} a yoke.\n`,
+    food: (p) => `I recommend you take at least 200 pounds of food for each person in your family. I see that you have 5 people in all. You'll need flour, sugar, bacon, and coffee. My price is ${Math.round(p * 100)} cents a pound.\n`,
+    clothing: (p) => `You'll need warm clothing in the mountains. I recommend taking at least 2 sets of clothes per person. Each set is ${money(p)}.\n`,
+    bullets: (p) => `I sell ammunition in boxes of 20 bullets. Each box costs ${money(p)}.\n`,
+    wheel: (p) => `It's a good idea to have a few spare parts for your wagon. Wagon wheels are ${money(p)} each.\n`,
+    axle: (p) => `Wagon axles are ${money(p)} each.\n`,
+    tongue: (p) => `Wagon tongues are ${money(p)} each.\n`,
+  };
 
-  function shop(opening) {
-    stopTravel();
-    renderStatus();
-    setAnim(sceneFor());
+  async function shop(opening) {
+    picture(null);
     const prices = OT.prices(G);
     const cart = {};
     ITEMS.forEach(([k]) => (cart[k] = 0));
+    const cost = (k) => (k === 'oxen' ? cart[k] * 2 : cart[k]) * prices[k];
+    const total = () => ITEMS.reduce((a, [k]) => a + cost(k), 0);
     const lm = OT.LANDMARKS[G.at];
-    const totalEl = h('span');
-    const msgEl = h('p', { class: 'muted', 'aria-live': 'polite' });
-    const rows = [];
-
-    function total() { return ITEMS.reduce((a, [k]) => a + cart[k] * prices[k], 0); }
-    function refresh() {
-      const t = total();
-      totalEl.textContent = `Bill ${money(t)} · You have ${money(G.money)}`;
-      totalEl.className = t > G.money ? 'h-poor' : '';
-      rows.forEach((r) => r());
+    for (;;) {
+      T.clear();
+      T.center(opening ? "HIRAM'S GENERAL STORE" : lm.name.toUpperCase());
+      T.center(opening ? 'Independence, Missouri' : 'Trading post');
+      T.center(OT.dateString(G));
+      T.rule();
+      ITEMS.forEach(([k, name], i) => {
+        const right = opening ? money(cost(k)) : k === 'oxen' ? `${money(prices[k] * 2)}/yoke` : k === 'food' ? `${money(prices[k])}/lb` : money(prices[k]);
+        option(`${i + 1}. ${name}`.padEnd(COLS - 14) + right.padStart(14), i + 1);
+      });
+      T.rule();
+      if (opening) T.line('Total bill:'.padEnd(28) + money(total()).padStart(12));
+      T.line('Amount you have:'.padEnd(28) + money(G.money).padStart(12));
+      T.blank();
+      option(`8. ${opening ? 'Leave the store' : 'Done shopping'}`, 8);
+      T.blank();
+      const n = await pick([1, 2, 3, 4, 5, 6, 7, 8], 'Which item would you like to buy? ');
+      if (n <= 7) {
+        const [k, name] = ITEMS[n - 1];
+        T.clear();
+        T.center(name.toUpperCase());
+        T.rule();
+        T.say(ITEM_HELP[k](prices[k]));
+        const unit = k === 'oxen' ? 'yoke' : k === 'food' ? 'pounds' : k === 'bullets' ? 'boxes' : k === 'clothing' ? 'sets' : '';
+        const room = k === 'oxen' ? Math.floor((OT.LIMITS.oxen - G.oxen) / 2) : OT.LIMITS[k] - Math.floor(G[k]);
+        const qty = await number(`How many ${unit ? unit + ' ' : ''}do you want? `, room);
+        if (opening) cart[k] = qty;
+        else if (qty > 0) {
+          const r = OT.buy(G, k, k === 'oxen' ? qty * 2 : qty);
+          r.ok ? Sound.good() : Sound.bad();
+          T.say(r.msg);
+          await pause();
+        }
+        continue;
+      }
+      if (!opening) return;
+      if (total() > G.money + 1e-9) {
+        Sound.bad();
+        T.blank();
+        T.say(`That comes to ${money(total())}, but you only have ${money(G.money)}. Let's go over the list again.`);
+        await pause();
+        continue;
+      }
+      if (cart.oxen < 1) { Sound.bad(); T.blank(); T.say("Don't forget, you'll need oxen to pull your wagon."); await pause(); continue; }
+      ITEMS.forEach(([k]) => { if (cart[k] > 0) OT.buy(G, k, k === 'oxen' ? cart[k] * 2 : cart[k]); });
+      T.blank();
+      T.say(`Thank you for your business. You have ${money(G.money)} left.`);
+      await pause();
+      return;
     }
-
-    const table = h('table', { class: 'sheet' },
-      h('thead', null, h('tr', null, h('th', null, 'Item'), h('th', { class: 'n' }, 'Have'), h('th', null, 'Buy'))),
-      h('tbody', null, ITEMS.map(([k, name, unit, step]) => {
-        const input = h('input', { id: 'buy-' + k, inputmode: 'numeric', value: '0', 'aria-label': 'Buy ' + name });
-        const have = h('td', { class: 'n' });
-        const set = (v) => {
-          const max = OT.LIMITS[k] - G[k];
-          cart[k] = Math.max(0, Math.min(max, Math.floor(Number(v) || 0)));
-          input.value = cart[k];
-          refresh();
-        };
-        input.addEventListener('change', () => set(input.value));
-        rows.push(() => { have.textContent = k === 'bullets' ? rounds(G.bullets) : k === 'food' ? Math.floor(G.food) : G[k]; });
-        const price = k === 'oxen' ? `${money(prices.oxen * 2)}/yoke` : k === 'food' ? `${money(prices.food)}/lb` : money(prices[k]);
-        return h('tr', null,
-          h('td', null, name, h('div', { class: 'muted' }, `${price} · ${unit}`)),
-          have,
-          h('td', null, h('span', { class: 'qty' },
-            h('button', { type: 'button', 'aria-label': 'Less ' + name, onclick: () => set(cart[k] - step) }, '-'),
-            input,
-            h('button', { type: 'button', 'aria-label': 'More ' + name, onclick: () => set(cart[k] + step) }, '+'))));
-      })));
-
-    function checkout() {
-      const t = total();
-      if (t > G.money + 1e-9) { msgEl.textContent = `That bill is ${money(t)}. You only have ${money(G.money)}.`; Sound.bad(); return false; }
-      const bought = [];
-      ITEMS.forEach(([k]) => { if (cart[k] > 0) { const r = OT.buy(G, k, cart[k]); if (r.ok) bought.push(r.msg); } });
-      ITEMS.forEach(([k]) => (cart[k] = 0));
-      document.querySelectorAll('[id^="buy-"]').forEach((i) => (i.value = '0'));
-      refresh();
-      return true;
-    }
-
-    const advice = opening
-      ? h('div', { class: 'quote' }, h('p', null, 'Most families take at least three yoke of oxen, a few sets of clothing each, and enough food for the first few hundred miles. Spare parts are cheap here and dear out there.'), h('cite', null, 'Hiram, keeper of the general store'))
-      : h('p', { class: 'muted' }, `Prices here are ${Math.round((OT.priceMultiplier(G) - 1) * 100)}% higher than in Independence.`);
-
-    panel(
-      h('div', { class: 'eyebrow' }, opening ? 'Independence, Missouri · ' + OT.dateString(G) : lm.name),
-      h('h2', null, opening ? "Hiram's General Store" : 'Trading post'),
-      advice,
-      h('div', { class: 'scroll-x' }, table),
-      h('div', { class: 'row' }, totalEl),
-      msgEl,
-      h('div', { class: 'row' },
-        btn('Buy', () => { if (checkout()) { msgEl.textContent = 'Loaded into the wagon.'; Sound.good(); } }, { primary: true }),
-        btn(opening ? 'Leave for Oregon' : 'Done', () => {
-          if (!opening && total() > G.money + 1e-9) {
-            Sound.bad();
-            return dialog(`You can't afford that bill, so nothing was bought.`, landmarkMenu);
-          }
-          if (total() > 0 && !checkout()) return;
-          if (opening) {
-            const why = OT.canLeave(G);
-            if (why) { msgEl.textContent = why; Sound.bad(); return; }
-            G.status = 'landmark';
-            autosave();
-            dialog([`You leave Independence on ${OT.dateString(G)}.`, 'Set your pace and rations from the menu any time. Good luck.'], () => departFrom(), { icon: '✦' });
-          } else landmarkMenu();
-        })),
-    );
-    refresh();
   }
 
-  // ---------- Landmarks ----------
-  function departFrom() {
-    OT.depart(G, 0);
-    travel();
-  }
-
-  function landmarkMenu() {
-    stopTravel();
-    renderStatus();
-    setAnim(sceneFor());
-    const lm = OT.LANDMARKS[G.at];
-    hud(lm.name, '');
-    if (G.status === 'river') return riverMenu();
-    if (G.status === 'dalles') return dallesMenu();
-    if (G.status === 'won') return finish();
-    if (G.status === 'dead') return gameOver();
-    const actions = [
-      btn('Continue on the trail', () => {
-        if (G.status === 'fork') return forkMenu();
-        departFrom();
-      }, { primary: true }),
-      btn('Check supplies', supplies),
-      btn('Look at map', showMap),
-      btn('Change pace', choosePace, { sub: OT.PACES.find((p) => p.id === G.pace).name }),
-      btn('Change food rations', chooseRations, { sub: OT.RATIONS.find((r) => r.id === G.rations).name }),
-      btn('Stop to rest', restMenu),
-      btn('Attempt to trade', trade),
-      OT.TALK[G.at] ? btn('Talk to people', talk) : null,
-      lm.type === 'fort' ? btn('Buy supplies', () => shop(false)) : null,
-      btn('Go hunting', hunt, { disabled: G.bullets < 0.05, sub: G.bullets < 0.05 ? 'No bullets' : null }),
-    ];
-    panel(
-      h('div', { class: 'eyebrow' }, OT.dateString(G)),
-      h('h2', null, lm.name),
-      h('div', { class: 'menu' }, actions),
-      h('div', { class: 'row' }, btn('Save and quit', () => { autosave(); title(); })),
-    );
-    autosave();
-  }
-
-  function forkMenu() {
-    const lm = OT.LANDMARKS[G.at];
-    panel(
-      h('h2', null, 'The trail divides here.'),
-      h('div', { class: 'menu' }, lm.fork.map((label, i) => btn(label, () => { OT.depart(G, i); travel(); }, { sub: `${lm.dist[i]} miles to ${OT.LANDMARKS[lm.next[i]].name}` }))),
-      h('div', { class: 'row' }, btn('Back', landmarkMenu)),
-    );
+  // ---------- Status ----------
+  function statusBlock() {
+    T.pair('Date:', OT.dateString(G));
+    T.pair('Weather:', OT.weatherString(G.weather));
+    T.pair('Health:', OT.healthLabel(G.health));
+    T.pair('Food:', `${Math.floor(G.food)} pounds`);
+    if (G.next) T.pair('Next landmark:', `${G.milesToNext} miles`);
+    T.pair('Miles traveled:', `${G.milesTraveled} miles`);
   }
 
   // ---------- Travel ----------
-  function travel() {
-    renderStatus();
+  async function travel() {
     G.status = 'travel';
-    stopTravel();
-    const scene = sceneFor();
-    setAnim((f) => { if (travelTimer) travelOffset += 0.6; scene(f); });
-    hud(OT.LANDMARKS[G.next].name, `${G.milesToNext} mi`);
-    panel(
-      h('p', null, `Traveling at a ${OT.PACES.find((p) => p.id === G.pace).name.toLowerCase()} pace on ${OT.RATIONS.find((r) => r.id === G.rations).name.toLowerCase()} rations.`),
-      h('div', { class: 'row' }, btn('Size up the situation', stopMenu, { primary: true, id: 'stopbtn' })),
-      h('p', { class: 'muted' }, 'Press the button any time to stop and use the menu.'),
-    );
-    travelTimer = setInterval(tick, window.__TW_FAST ? 15 : 550);
+    const zone = OT.LANDMARKS[G.next].zone;
+    let moving = true;
+    picture((f) => { if (moving) travelOffset += 0.6; Art.travelScene(ctx, { zone, weather: G.weather, offset: travelOffset, frame: moving ? f : 0, oxen: G.oxen }); });
+    let stop = false;
+    const onStop = (e) => { if (!e.key || e.key === 'Enter' || e.key === ' ') { if (e.preventDefault) e.preventDefault(); stop = true; } };
+    const draw = () => {
+      T.clear();
+      statusBlock();
+      T.blank();
+      const el = T.line('Press ENTER to size up the situation', 'opt');
+      el.tabIndex = 0;
+    };
+    draw();
+    // Attach after the current key or click event finishes, so the Enter that
+    // started travel doesn't also stop it.
+    await new Promise((r) => setTimeout(r, 0));
+    window.addEventListener('keydown', onStop);
+    termEl.addEventListener('click', onStop);
+    canvas.addEventListener('click', onStop);
+    const cleanup = () => { window.removeEventListener('keydown', onStop); termEl.removeEventListener('click', onStop); canvas.removeEventListener('click', onStop); };
+    try {
+      for (;;) {
+        await sleep(FAST ? 0 : 520);
+        if (FAST) await new Promise((r) => setTimeout(r, 8));
+        if (stop) { moving = false; cleanup(); return sizeUp(); }
+        const res = OT.travelDay(G);
+        draw();
+        const events = res.events.filter((e) => e.type !== 'nofood' || G.food <= 0);
+        if (events.length || G.status === 'dead' || res.arrived) {
+          moving = false;
+          cleanup();
+          T.clear();
+          statusBlock();
+          await showEvents(events);
+          if (G.status === 'dead') return gameOver();
+          if (res.arrived) return arrival();
+          if (G.broken) return broken();
+          if (events.some((e) => e.type === 'blocked')) return sizeUp();
+          return travel();
+        }
+      }
+    } finally { cleanup(); }
   }
 
-  function stopTravel() { if (travelTimer) { clearInterval(travelTimer); travelTimer = null; } }
-
-  function tick() {
-    const res = OT.travelDay(G);
-    renderStatus();
-    hud(G.next ? OT.LANDMARKS[G.next].name : OT.LANDMARKS[G.at].name, G.next ? `${G.milesToNext} mi` : '');
-    const notable = res.events.filter((e) => e.type !== 'nofood' || G.food <= 0);
-    if (G.status === 'dead') { stopTravel(); Sound.death(); return dialog(notable.map((e) => e.msg), gameOver); }
-    if (notable.length) {
-      stopTravel();
-      const types = notable.map((e) => e.type);
-      if (types.includes('death')) Sound.death(); else if (types.some((t) => t === 'good' || t === 'recover')) Sound.good(); else Sound.bad();
-      const after = () => {
-        if (res.arrived) return arrival();
-        if (G.broken) return brokenMenu();
-        if (types.includes('blocked')) return stopMenu();
-        travel();
-      };
-      return dialog(notable.map((e) => e.msg), after);
+  async function showEvents(events) {
+    for (const e of events) {
+      if (e.type === 'riders') { await riders(); continue; }
+      T.blank();
+      if (e.type === 'death') Sound.death(); else if (e.type === 'good' || e.type === 'recover') Sound.good(); else Sound.bad();
+      T.say(e.msg, 'inv');
+      await pause();
     }
-    if (res.arrived) { stopTravel(); arrival(); }
   }
 
-  function arrival() {
-    Sound.arrive();
-    const lm = OT.LANDMARKS[G.at];
+  // The 1978 game's shootout: type the word as fast as you can.
+  async function riders() {
+    Sound.bad();
+    T.clear();
+    statusBlock();
+    T.blank();
+    T.say('RIDERS AHEAD. THEY LOOK HOSTILE.', 'inv');
+    if (G.bullets <= 0) {
+      T.say('You have no bullets.');
+      const r = OT.resolveRiders(G, Infinity);
+      r.msgs.forEach((m) => T.say(m));
+      await pause();
+      return;
+    }
+    await pause('Press ENTER when you are ready to draw');
+    const word = ['BANG', 'BLAM', 'POW', 'WHAM'][Math.floor(Math.random() * 4)];
+    T.blank();
+    T.say(`TYPE ${word}`);
+    const t0 = performance.now();
+    const typed = (await ask('> ', { maxLength: 6, forceFocus: true })).toUpperCase();
+    const ms = typed === word ? performance.now() - t0 : Infinity;
+    Sound.shot();
+    const r = OT.resolveRiders(G, ms);
+    T.blank();
+    if (ms !== Infinity) T.say(`Reaction time: ${(ms / 1000).toFixed(2)} seconds.`, 'dim');
+    r.msgs.forEach((m) => T.say(m));
+    await pause();
+  }
+
+  async function broken() {
+    for (;;) {
+      const part = G.broken;
+      if (!part) return sizeUp();
+      T.clear();
+      statusBlock();
+      T.blank();
+      T.say(`Broken wagon ${part}. You have ${G[part]} spare.`);
+      T.blank();
+      const c = await choose(['Try to fix it (takes a day)', `Replace it with a spare`, 'Look for someone to trade', 'Check supplies']);
+      if (c === 0) { const r = OT.repair(G); T.say(r.msg); r.ok ? Sound.good() : Sound.bad(); await pause(); }
+      else if (c === 1) { const r = OT.replacePart(G); T.say(r.msg); r.ok ? Sound.good() : Sound.bad(); await pause(); }
+      else if (c === 2) await trade();
+      else await supplies();
+      if (G.status === 'dead') return gameOver();
+    }
+  }
+
+  // Menu while stopped on the trail.
+  async function sizeUp() {
+    G.status = 'travel';
+    if (G.broken) return broken();
     autosave();
-    if (G.status === 'won') return finish();
-    dialog([`You have reached ${lm.name}.`, describe(G.at)], landmarkMenu, { icon: '✦' });
+    for (;;) {
+      const zone = OT.LANDMARKS[G.next].zone;
+      picture((f) => Art.travelScene(ctx, { zone, weather: G.weather, offset: travelOffset, frame: 0, oxen: G.oxen }));
+      T.clear();
+      statusBlock();
+      T.pair('Pace:', paceName());
+      T.pair('Rations:', ratName());
+      T.blank();
+      T.say('You may:');
+      const c = await choose(['Continue on trail', 'Check supplies', 'Look at map', 'Change pace', 'Change food rations', 'Stop to rest', 'Attempt to trade', 'Hunt for food', 'Save and quit']);
+      if (c === 0) {
+        if (G.oxen <= 0) { Sound.bad(); T.say('You have no oxen to pull the wagon. Try trading for some.'); await pause(); continue; }
+        return travel();
+      }
+      if (await commonAction(c)) return;
+      if (G.status === 'dead') return gameOver();
+      if (G.broken) return broken();
+    }
   }
 
-  function describe(id) {
+  // Shared menu actions. Returns true if control flow left this menu.
+  async function commonAction(c) {
+    if (c === 1) await supplies();
+    else if (c === 2) await map();
+    else if (c === 3) await pace();
+    else if (c === 4) await rations();
+    else if (c === 5) await rest();
+    else if (c === 6) await trade();
+    else if (c === 7) await hunt();
+    else if (c === 8) { autosave(); await title(); return true; }
+    return false;
+  }
+
+  async function supplies() {
+    T.clear();
+    T.center('YOUR SUPPLIES');
+    T.rule();
+    T.pair('oxen', G.oxen + (G.oxInjured ? ' (1 injured)' : ''));
+    T.pair('sets of clothing', G.clothing);
+    T.pair('bullets', rounds(G.bullets));
+    T.pair('wagon wheels', G.wheel);
+    T.pair('wagon axles', G.axle);
+    T.pair('wagon tongues', G.tongue);
+    T.pair('pounds of food', Math.floor(G.food));
+    T.pair('money left', money(G.money));
+    T.blank();
+    T.center('YOUR PARTY');
+    T.rule();
+    for (const p of G.party) T.pair(p.name + (p.leader ? '*' : ''), p.alive ? (p.ill ? p.ill.what.replace(/^a /, '') : 'well') : 'died');
+    T.blank();
+    await pause();
+  }
+
+  async function map() {
+    picture((f) => Art.mapScene(ctx, { landmarks: OT.LANDMARKS, path: G.path, next: G.next, milesToNext: G.milesToNext, segmentLength: G.segmentLength }));
+    T.clear();
+    T.center('MAP OF THE TRAIL');
+    T.blank();
+    T.art(routeLines().join('\n'));
+    T.blank();
+    T.line(' ' + progressBar());
+    T.line(` ${G.milesTraveled} miles traveled`, 'dim');
+    T.blank();
+    await pause();
+  }
+
+  async function pace() {
+    T.clear();
+    T.say(`Change pace (currently "${paceName()}")`);
+    T.blank();
+    OT.PACES.forEach((p) => T.say(`${p.name}: ${p.desc}`, 'dim'));
+    T.blank();
+    const c = await choose(OT.PACES.map((p) => `a ${p.name.toLowerCase()} pace`).concat(['find out what these different paces mean']));
+    if (c < 3) G.pace = OT.PACES[c].id;
+  }
+
+  async function rations() {
+    T.clear();
+    T.say(`Change food rations (currently "${ratName()}")`);
+    T.blank();
+    const c = await choose(OT.RATIONS.map((r) => `${r.name} - ${r.lbs} lb per person per day`.replace(' - ', ': ')));
+    G.rations = OT.RATIONS[c].id;
+  }
+
+  async function rest() {
+    T.clear();
+    const n = await number('How many days would you like to rest? ', 9);
+    if (!n) return;
+    const ev = OT.rest(G, n);
+    T.clear();
+    statusBlock();
+    T.blank();
+    for (const e of ev) T.say(e.msg);
+    T.say(`You rested ${n} day${n > 1 ? 's' : ''}. Health is ${OT.healthLabel(G.health)}.`);
+    await pause();
+  }
+
+  async function trade() {
+    T.clear();
+    const offer = OT.tradeOffer(G);
+    if (!offer) { T.say('Nobody wants to trade with you today.'); await pause(); return; }
+    const l = (o) => `${o.qty} ${OT.ITEM_LABEL[o.item]}`;
+    T.say(`You meet another emigrant who wants ${l(offer.give)}. They will trade you ${l(offer.get)}.`);
+    T.blank();
+    if (G[offer.give.item] < offer.give.qty) { T.say("You don't have this.", 'dim'); await pause(); return; }
+    if (await yesNo('Are you willing to trade? (Y/N)')) { const r = OT.acceptTrade(G, offer); Sound.good(); T.say(r.msg); await pause(); }
+  }
+
+  async function talk() {
+    const lines = OT.TALK[G.at];
+    if (!lines) return;
+    const i = (G.talkIndex = ((G.talkIndex || 0) + 1)) % lines.length;
+    const [who, text] = lines[i];
+    T.clear();
+    T.say(`${who} tells you:`, 'dim');
+    T.blank();
+    T.say(`"${text}"`);
+    T.blank();
+    await pause();
+  }
+
+  // ---------- Landmarks ----------
+  function blurb(id) {
     return ({
       kansas: 'The first big river west of Independence. Ferries run when the water is high.',
-      bigblue: 'A clear, quick river named for its color. Many trains camp at the springs nearby.',
+      bigblue: 'A clear, quick river. Trains often camp at the springs nearby.',
       kearney: 'A new army post on the Platte River, built to protect emigrants.',
       chimney: 'A tall spire of clay and sandstone, visible for days across the plains.',
-      laramie: 'An old fur trading post at the edge of the high plains. Last good resupply for weeks.',
-      indrock: 'A great granite dome covered with the names of travelers who came before.',
-      southpass: 'The gentle crossing of the Continental Divide. The trail splits ahead.',
+      laramie: 'An old trading post at the edge of the high plains. Last good resupply for weeks.',
+      indrock: 'A granite dome covered with the names of travelers who came before.',
+      southpass: 'The gentle crossing of the Continental Divide.',
       green: 'A deep, cold river. Few try to ford it.',
       bridger: 'A trading post run by mountain man Jim Bridger.',
-      soda: 'Springs of naturally bubbling water. Some say it cures what ails you.',
+      soda: 'Springs of naturally bubbling water.',
       hall: 'A Hudson\'s Bay Company post on the Snake River plain.',
-      snake: 'A wide, dangerous river crossing. The Shoshone know safe routes across.',
+      snake: 'A wide, dangerous crossing. The Shoshone know the safe routes.',
       boise: 'A small fort along the Snake. The Blue Mountains rise to the west.',
-      bluemtns: 'Steep, forested ridges. The trail divides on the far side.',
+      bluemtns: 'Steep, forested ridges.',
       wallawalla: 'A trading post near the Columbia River.',
-      dalles: 'The overland trail ends at the Columbia. Raft the river or take the Barlow toll road.',
+      dalles: 'The overland trail ends at the Columbia River.',
     })[id] || '';
   }
 
-  function stopMenu() {
-    stopTravel();
-    renderStatus();
-    setAnim(sceneFor());
-    if (G.broken) return brokenMenu();
-    panel(
-      h('div', { class: 'eyebrow' }, `${G.milesToNext} miles to ${OT.LANDMARKS[G.next].name}`),
-      h('div', { class: 'menu' },
-        btn('Continue on the trail', () => {
-          if (G.oxen <= 0) { Sound.bad(); return dialog('You have no oxen to pull the wagon. Try trading for some.'); }
-          travel();
-        }, { primary: true }),
-        btn('Check supplies', supplies),
-        btn('Look at map', showMap),
-        btn('Change pace', choosePace, { sub: OT.PACES.find((p) => p.id === G.pace).name }),
-        btn('Change food rations', chooseRations, { sub: OT.RATIONS.find((r) => r.id === G.rations).name }),
-        btn('Stop to rest', restMenu),
-        btn('Attempt to trade', trade),
-        btn('Go hunting', hunt, { disabled: G.bullets < 0.05, sub: G.bullets < 0.05 ? 'No bullets' : null }),
-      ),
-      h('div', { class: 'row' }, btn('Save and quit', () => { autosave(); title(); })),
-    );
+  async function arrival() {
+    Sound.arrive();
     autosave();
+    if (G.status === 'won') return finish();
+    const lm = OT.LANDMARKS[G.at];
+    landmarkPicture(G.at);
+    T.clear();
+    T.say(`You are now at ${lm.name}.`);
+    T.say(OT.dateString(G), 'dim');
+    T.blank();
+    if (lm.type !== 'river' && await yesNo('Would you like to look around? (Y/N)')) {
+      T.blank();
+      T.say(blurb(G.at));
+      T.blank();
+      await pause();
+    }
+    return landmark(true);
   }
 
-  function back() { return G.status === 'travel' ? stopMenu() : landmarkMenu(); }
-
-  function brokenMenu() {
-    stopTravel();
-    renderStatus();
-    const part = G.broken;
-    panel(
-      h('h2', null, `Broken wagon ${part}`),
-      h('p', null, `You can try to repair it, which takes a day, or replace it with a spare. You have ${G[part]} spare ${part}${G[part] === 1 ? '' : 's'}.`),
-      h('div', { class: 'menu' },
-        btn('Try to repair', () => { const r = OT.repair(G); renderStatus(); r.ok ? Sound.good() : Sound.bad(); dialog(r.msg, () => (G.broken ? brokenMenu() : stopMenu())); }),
-        btn('Replace with a spare', () => { const r = OT.replacePart(G); r.ok ? Sound.good() : Sound.bad(); dialog(r.msg, () => (G.broken ? brokenMenu() : stopMenu())); }, { disabled: G[part] < 1 }),
-        btn('Look for someone to trade', trade),
-        btn('Check supplies', supplies),
-      ),
-    );
+  async function landmark() {
+    for (;;) {
+      const lm = OT.LANDMARKS[G.at];
+      if (G.status === 'dead') return gameOver();
+      if (G.status === 'won') return finish();
+      if (G.status === 'river') return river();
+      if (G.status === 'dalles') return dalles();
+      landmarkPicture(G.at);
+      autosave();
+      T.clear();
+      T.line(lm.name, 'inv');
+      T.line(OT.dateString(G));
+      T.blank();
+      T.pair('Weather:', OT.weatherString(G.weather));
+      T.pair('Health:', OT.healthLabel(G.health));
+      T.pair('Pace:', paceName());
+      T.pair('Rations:', ratName());
+      T.blank();
+      T.say('You may:');
+      const fort = lm.type === 'fort';
+      const c = await choose(['Continue on trail', 'Check supplies', 'Look at map', 'Change pace', 'Change food rations', 'Stop to rest', 'Attempt to trade', 'Hunt for food', 'Save and quit', OT.TALK[G.at] ? 'Talk to people' : null, fort ? 'Buy supplies' : null]);
+      if (c === 0) {
+        if (G.oxen <= 0) { Sound.bad(); T.say('You have no oxen to pull the wagon.'); await pause(); continue; }
+        if (G.status === 'fork') return fork();
+        OT.depart(G, 0);
+        return travel();
+      }
+      if (c === 9) { await talk(); continue; }
+      if (c === 10) { await shop(false); continue; }
+      if (await commonAction(c)) return;
+      if (G.broken) { G.broken = null; } // repairs happen in camp at landmarks
+    }
   }
 
-  // ---------- Info screens ----------
-  function supplies() {
-    const party = OT.alive(G).length;
-    panel(
-      h('h2', null, 'Your supplies'),
-      h('div', { class: 'scroll-x' }, h('table', { class: 'sheet' }, h('tbody', null,
-        [['Oxen', G.oxen + (G.oxInjured ? ' (one injured)' : '')], ['Sets of clothing', G.clothing], ['Bullets', rounds(G.bullets)],
-         ['Wagon wheels', G.wheel], ['Wagon axles', G.axle], ['Wagon tongues', G.tongue], ['Pounds of food', Math.floor(G.food) + (G.food > 0 ? `, about ${Math.floor(G.food / Math.max(1, party * OT.RATIONS.find((r) => r.id === G.rations).lbs))} days` : '')], ['Money left', money(G.money)]]
-          .map(([k, v]) => h('tr', null, h('td', null, k), h('td', { class: 'n' }, v)))))),
-      h('h2', null, 'Your party'),
-      h('div', { class: 'party' }, G.party.map((p) => h('div', null, h('span', null, p.name + (p.leader ? ' (leader)' : '')), h('span', { class: p.alive ? (p.ill ? 'h-fair' : 'h-good') : 'muted' }, p.alive ? (p.ill ? 'has ' + p.ill.what : 'well') : 'died')))),
-      h('div', { class: 'row' }, btn('Back', back, { primary: true })),
-    );
-  }
-
-  function showMap() {
-    setAnim(() => Art.mapScene(ctx, { landmarks: OT.LANDMARKS, path: G.path, next: G.next, milesToNext: G.milesToNext, segmentLength: G.segmentLength }));
-    hud('', '');
-    panel(
-      h('h2', null, 'Map of the trail'),
-      h('p', null, `You have traveled ${G.milesTraveled} miles. The red line shows your route so far.`),
-      h('div', { class: 'row' }, btn('Back', () => { setAnim(sceneFor()); back(); }, { primary: true })),
-    );
-  }
-
-  function choosePace() {
-    panel(
-      h('h2', null, 'Change pace'),
-      h('div', { class: 'menu' }, OT.PACES.map((p) => btn(p.name, () => { G.pace = p.id; back(); }, { sub: p.desc, on: G.pace === p.id }))),
-      h('div', { class: 'row' }, btn('Back', back)),
-    );
-  }
-
-  function chooseRations() {
-    panel(
-      h('h2', null, 'Change food rations'),
-      h('div', { class: 'menu' }, OT.RATIONS.map((r) => btn(r.name, () => { G.rations = r.id; back(); }, { sub: `${r.desc} ${r.lbs} lb per person per day.`, on: G.rations === r.id }))),
-      h('div', { class: 'row' }, btn('Back', back)),
-    );
-  }
-
-  function restMenu() {
-    panel(
-      h('h2', null, 'How many days would you like to rest?'),
-      h('div', { class: 'menu' }, [1, 2, 3, 5, 7].map((d) => btn(`${d} day${d > 1 ? 's' : ''}`, () => {
-        const ev = OT.rest(G, d);
-        renderStatus();
-        if (G.status === 'dead') { Sound.death(); return dialog(ev.map((e) => e.msg), gameOver); }
-        dialog(ev.map((e) => e.msg).concat([`You rested ${d} day${d > 1 ? 's' : ''}. Health is ${OT.healthLabel(G.health)}.`]), back);
-      }))),
-      h('div', { class: 'row' }, btn('Back', back)),
-    );
-  }
-
-  function trade() {
-    const offer = OT.tradeOffer(G);
-    renderStatus();
-    if (!offer) return dialog('Nobody wants to trade with you today.', back);
-    const lbl = (o) => `${o.qty} ${OT.ITEM_LABEL[o.item]}`;
-    const can = G[offer.give.item] >= offer.give.qty;
-    panel(
-      h('h2', null, 'A traveler wants to trade'),
-      h('p', null, `They would like ${lbl(offer.give)}. In exchange they offer ${lbl(offer.get)}.`),
-      h('p', { class: 'muted' }, `You have ${offer.give.item === 'bullets' ? rounds(G.bullets) + ' bullets' : Math.floor(G[offer.give.item]) + ' ' + OT.ITEM_LABEL[offer.give.item]}.`),
-      h('div', { class: 'row' },
-        btn('Accept', () => { const r = OT.acceptTrade(G, offer); r.ok ? Sound.good() : Sound.bad(); dialog(r.msg, G.broken ? brokenMenu : back); }, { primary: true, disabled: !can }),
-        btn('Decline', G.broken ? brokenMenu : back)),
-    );
-  }
-
-  function talk() {
-    const lines = OT.TALK[G.at];
-    let i = 0;
-    const show = () => {
-      const [who, text] = lines[i % lines.length];
-      panel(
-        h('div', { class: 'quote' }, h('p', null, text), h('cite', null, who)),
-        h('div', { class: 'row' }, btn('Talk to someone else', () => { i++; show(); }), btn('Done', landmarkMenu, { primary: true })),
-      );
-    };
-    show();
+  async function fork() {
+    const lm = OT.LANDMARKS[G.at];
+    for (;;) {
+      T.clear();
+      T.say('The trail divides here. You may:');
+      T.blank();
+      const c = await choose([...lm.fork.map((f, i) => `${f} (${lm.dist[i]} mi)`), 'See the map']);
+      if (c === lm.fork.length) { await map(); landmarkPicture(G.at); continue; }
+      OT.depart(G, c);
+      return travel();
+    }
   }
 
   // ---------- Rivers ----------
-  function riverMenu() {
+  async function river() {
     const lm = OT.LANDMARKS[G.at];
-    const r = G.river;
-    hud(lm.name, '');
-    const opts = [
-      btn('Attempt to ford the river', () => cross('ford'), { sub: 'Safe only in shallow water.' }),
-      btn('Caulk the wagon and float it', () => cross('caulk'), { sub: 'Risky in swift water.' }),
-      lm.ferry ? btn(`Take the ferry ($${lm.ferry})`, () => cross('ferry'), { disabled: G.money < lm.ferry, sub: `Wait about ${r.ferryWait} day${r.ferryWait > 1 ? 's' : ''}.` }) : null,
-      lm.guide ? btn('Hire a Shoshone guide', () => cross('guide'), { disabled: G.clothing < 3, sub: 'Costs 3 sets of clothing.' }) : null,
-      btn('Wait a day to see if conditions change', () => { const ev = OT.riverWait(G); renderStatus(); if (G.status === 'dead') return dialog(ev.map((e) => e.msg), gameOver); dialog(ev.map((e) => e.msg), riverMenu); }),
-      btn('Check supplies', () => { supplies(); }),
-      btn('Talk to people', talk),
-    ];
-    panel(
-      h('div', { class: 'eyebrow' }, OT.dateString(G)),
-      h('h2', null, lm.name),
-      h('p', null, `The river is ${r.width} feet across and ${r.depth.toFixed(1)} feet deep in the middle. The current is ${r.swift ? 'swift' : 'moderate'}.`),
-      h('div', { class: 'menu' }, opts),
-    );
+    for (;;) {
+      const r = G.river;
+      landmarkPicture(G.at);
+      T.clear();
+      T.line(lm.name, 'inv');
+      T.line(OT.dateString(G));
+      T.blank();
+      T.pair('Weather:', OT.weatherString(G.weather));
+      T.pair('River width:', `${r.width} feet`);
+      T.pair('River depth:', `${r.depth.toFixed(1)} feet`);
+      T.blank();
+      T.say('You must cross the river in order to continue. You may:');
+      const opts = [
+        'attempt to ford the river',
+        'caulk the wagon and float it across',
+        lm.ferry ? `take a ferry across ($${lm.ferry})` : null,
+        lm.guide ? 'hire a Shoshone guide (3 sets of clothing)' : null,
+        'wait to see if conditions improve',
+        'get more information',
+      ];
+      const c = await choose(opts);
+      if (c === 4) { const ev = OT.riverWait(G); ev.forEach((e) => T.say(e.msg)); if (G.status === 'dead') return gameOver(); continue; }
+      if (c === 5) {
+        T.clear();
+        T.say('To ford a river means to pull your wagon across a shallow part of the river, with the oxen still attached. It is safe only in water under about 2.5 feet.');
+        T.blank();
+        T.say(`To caulk the wagon means to seal it so that no water can get in. The wagon can then be floated across like a boat. The current here is ${r.swift ? 'swift, which makes this riskier' : 'moderate'}.`);
+        T.blank();
+        if (lm.ferry) T.say(`A ferry costs $${lm.ferry} and you may have to wait ${r.ferryWait} day${r.ferryWait > 1 ? 's' : ''}.`);
+        if (lm.guide) T.say('A Shoshone guide knows the safe route and asks 3 sets of clothing.');
+        T.blank();
+        await pause();
+        continue;
+      }
+      const method = ['ford', 'caulk', 'ferry', 'guide'][c];
+      const res = OT.crossRiver(G, method);
+      if (!res.ok) { Sound.bad(); T.blank(); res.msgs.forEach((m) => T.say(m)); await pause(); continue; }
+      await crossingAnimation(method, lm.zone);
+      T.clear();
+      const bad = res.msgs.some((m) => /lost|drown|tipped|stuck/i.test(m));
+      bad ? Sound.bad() : Sound.good();
+      res.msgs.forEach((m) => T.say(m, bad ? 'inv' : ''));
+      T.blank();
+      await pause();
+      if (G.status === 'dead') return gameOver();
+      return landmark();
+    }
   }
 
-  function cross(method) {
-    stopTravel();
-    let p = 0;
-    const zone = OT.LANDMARKS[G.at].zone;
-    panel(h('p', null, 'Crossing the river...'));
-    const res = OT.crossRiver(G, method);
-    if (!res.ok) { Sound.bad(); return dialog(res.msgs, riverMenu); }
-    setAnim((f) => {
-      p = Math.min(1, p + 0.006);
-      Art.crossingScene(ctx, { zone, frame: f, progress: p, method });
-      if (p >= 1) {
-        setAnim(sceneFor());
-        renderStatus();
-        const bad = res.msgs.some((m) => /lost|drown|tipped|stuck/i.test(m));
-        bad ? Sound.bad() : Sound.good();
-        dialog(res.msgs, () => (G.status === 'dead' ? gameOver() : landmarkMenu()));
-      }
+  function crossingAnimation(method, zone) {
+    return new Promise((resolve) => {
+      let p = 0;
+      T.clear();
+      T.say('Crossing...');
+      picture((f) => {
+        p = Math.min(1, p + (FAST ? 0.2 : 0.006));
+        Art.crossingScene(ctx, { zone, frame: f, progress: p, method });
+        if (p >= 1 && anim) { anim = null; resolve(); }
+      });
     });
   }
 
   // ---------- The Dalles ----------
-  function dallesMenu() {
-    panel(
-      h('div', { class: 'eyebrow' }, OT.dateString(G)),
-      h('h2', null, 'The Dalles'),
-      h('p', null, 'The wagon road ends here at the Columbia River. You can build a raft and float the last stretch, or pay to take the Barlow Road over the shoulder of Mount Hood.'),
-      h('div', { class: 'menu' },
-        btn('Raft down the Columbia', raftIntro, { primary: true, sub: 'Steer clear of the rocks.' }),
-        btn(`Take the Barlow Road ($${OT.BARLOW_TOLL})`, () => {
-          const r = OT.takeBarlow(G);
-          renderStatus();
-          if (!r.ok) { Sound.bad(); return dialog(r.msg, dallesMenu); }
-          dialog(r.msgs, () => (G.status === 'dead' ? gameOver() : finish()));
-        }, { disabled: G.money < OT.BARLOW_TOLL, sub: 'Slow, but no rapids.' }),
-        btn('Check supplies', supplies),
-        btn('Talk to people', talk),
-      ),
-    );
+  async function dalles() {
+    for (;;) {
+      landmarkPicture('dalles');
+      T.clear();
+      T.line('The Dalles', 'inv');
+      T.line(OT.dateString(G));
+      T.blank();
+      T.say('The trail divides here. You may:');
+      const c = await choose(['float down the Columbia River', `take the Barlow Toll Road ($${OT.BARLOW_TOLL})`, 'check supplies', 'talk to people']);
+      if (c === 0) return raft();
+      if (c === 1) {
+        const r = OT.takeBarlow(G);
+        if (!r.ok) { Sound.bad(); T.say(r.msg); await pause(); continue; }
+        T.clear();
+        r.msgs.forEach((m) => T.say(m));
+        await pause();
+        return G.status === 'dead' ? gameOver() : finish();
+      }
+      if (c === 2) await supplies();
+      if (c === 3) await talk();
+    }
   }
 
-  // ---------- Hunting mini-game ----------
+  // ---------- Hunting ----------
   function hunt() {
-    stopTravel();
-    const zone = OT.huntZone(G);
-    const kinds = OT.HUNT_ANIMALS[zone];
-    const rng = OT.makeRng(G.day * 31 + G.rngState);
-    const brush = Array.from({ length: 7 }, (_, i) => ({ x: 20 + i * 44 + rng.int(-8, 8), y: 118 + rng.int(0, 30), tree: zone === 'rockies' || zone === 'cascades' ? rng.chance(0.5) : false }));
-    const animals = [];
-    const flashes = [];
-    const kills = [];
-    let fired = 0;
-    let shots = rounds(G.bullets);
-    let aim = { x: 160, y: 110 };
-    let timeLeft = 30 * 60;
-    let over = false;
-
-    const info = h('p', { class: 'muted', 'aria-live': 'polite' });
-    function updateInfo() { info.textContent = `Bullets: ${shots} · Meat: ${kills.reduce((a, k) => a + OT.ANIMAL_MEAT[k], 0)} lb · ${Math.ceil(timeLeft / 60)}s`; }
-    function spawn() {
-      const kind = rng.pick(kinds);
-      const s = Art.ANIMAL_SHAPES[kind];
-      const dir = rng.chance(0.5) ? 1 : -1;
-      animals.push({ kind, x: dir > 0 ? -30 : Art.W + 10, y: 108 + rng.int(0, 44), vx: dir * s.speed * (0.8 + rng() * 0.6), dead: false });
-    }
-    function toCanvas(ev) {
-      const r = canvas.getBoundingClientRect();
-      return { x: Math.round((ev.clientX - r.left) / r.width * Art.W), y: Math.round((ev.clientY - r.top) / r.height * Art.H) };
-    }
-    function shoot(pt) {
-      if (over || shots <= 0) return;
-      shots--; fired++;
-      Sound.shot();
-      flashes.push({ x: pt.x, y: pt.y, t: 6 });
-      for (const a of animals) {
-        if (a.dead) continue;
-        const s = Art.ANIMAL_SHAPES[a.kind];
-        const pad = s.w < 10 ? 4 : 2;
-        if (pt.x >= a.x - pad && pt.x <= a.x + s.w + pad && pt.y >= a.y - s.h - pad && pt.y <= a.y + pad) {
-          a.dead = true; a.vx = 0; kills.push(a.kind); Sound.hit(); break;
+    if (G.bullets < 0.05) { T.blank(); T.say('You have no bullets.'); Sound.bad(); return pause(); }
+    return new Promise((resolve) => {
+      const zone = OT.huntZone(G);
+      const kinds = OT.HUNT_ANIMALS[zone];
+      const rng = OT.makeRng(G.day * 31 + G.rngState);
+      const brush = Array.from({ length: 6 }, (_, i) => ({ x: 14 + i * 46 + rng.int(-8, 8), y: 118 + rng.int(0, 30), tree: zone === 'rockies' || zone === 'cascades' ? rng.chance(0.5) : false }));
+      const animals = [], flashes = [], kills = [];
+      let fired = 0, shots = rounds(G.bullets), aim = { x: 140, y: 120 }, timeLeft = FAST ? 30 : 30 * 60, over = false;
+      T.clear();
+      T.say('HUNTING', 'inv');
+      T.say(coarse ? 'Tap an animal to shoot.' : 'Click an animal, or aim with the arrow keys and press SPACE.');
+      const info = T.line('');
+      const stopEl = T.line('Press ENTER to stop hunting', 'opt');
+      const upd = () => { info.textContent = `Bullets: ${shots}   Meat: ${kills.reduce((a, k) => a + OT.ANIMAL_MEAT[k], 0)} lb   ${Math.ceil(timeLeft / 60)}s`; };
+      const spawn = () => {
+        const kind = rng.pick(kinds), s = Art.ANIMAL_SHAPES[kind], dir = rng.chance(0.5) ? 1 : -1;
+        animals.push({ kind, x: dir > 0 ? -30 : Art.W + 10, y: 108 + rng.int(0, 44), vx: dir * s.speed * (0.8 + rng() * 0.6), dead: false });
+      };
+      const toCanvas = (ev) => { const r = canvas.getBoundingClientRect(); return { x: Math.round((ev.clientX - r.left) / r.width * Art.W), y: Math.round((ev.clientY - r.top) / r.height * Art.H) }; };
+      const shoot = (pt) => {
+        if (over || shots <= 0) return;
+        shots--; fired++; Sound.shot();
+        flashes.push({ x: pt.x, y: pt.y, t: 6 });
+        for (const a of animals) {
+          if (a.dead) continue;
+          const s = Art.ANIMAL_SHAPES[a.kind], pad = s.w < 10 ? 4 : 2;
+          if (pt.x >= a.x - pad && pt.x <= a.x + s.w + pad && pt.y >= a.y - s.h - pad && pt.y <= a.y + pad) { a.dead = true; a.vx = 0; kills.push(a.kind); Sound.hit(); break; }
         }
+        upd();
+        if (shots <= 0) end();
+      };
+      const onMove = (ev) => { aim = toCanvas(ev); };
+      const onDown = (ev) => { ev.preventDefault(); Sound.unlock(); aim = toCanvas(ev); shoot(aim); };
+      const onKey = (ev) => {
+        const k = ev.key;
+        if (k === 'ArrowLeft') aim.x = Math.max(0, aim.x - 6);
+        else if (k === 'ArrowRight') aim.x = Math.min(Art.W, aim.x + 6);
+        else if (k === 'ArrowUp') aim.y = Math.max(90, aim.y - 6);
+        else if (k === 'ArrowDown') aim.y = Math.min(Art.H, aim.y + 6);
+        else if (k === ' ') shoot(aim);
+        else if (k === 'Enter') end();
+        else return;
+        ev.preventDefault();
+      };
+      canvas.addEventListener('pointermove', onMove);
+      canvas.addEventListener('pointerdown', onDown);
+      window.addEventListener('keydown', onKey);
+      stopEl.addEventListener('click', () => end());
+      async function end() {
+        if (over) return;
+        over = true;
+        canvas.removeEventListener('pointermove', onMove);
+        canvas.removeEventListener('pointerdown', onDown);
+        window.removeEventListener('keydown', onKey);
+        const r = OT.finishHunt(G, fired, kills);
+        T.clear();
+        T.say(r.msg);
+        T.blank();
+        await pause();
+        resolve();
       }
-      updateInfo();
-      if (shots <= 0) end();
-    }
-    const onMove = (ev) => { aim = toCanvas(ev); };
-    const onDown = (ev) => { ev.preventDefault(); Sound.unlock(); aim = toCanvas(ev); shoot(aim); };
-    const onKey = (ev) => {
-      const k = ev.key;
-      if (k === 'ArrowLeft') aim.x = Math.max(0, aim.x - 6);
-      else if (k === 'ArrowRight') aim.x = Math.min(Art.W, aim.x + 6);
-      else if (k === 'ArrowUp') aim.y = Math.max(90, aim.y - 6);
-      else if (k === 'ArrowDown') aim.y = Math.min(Art.H, aim.y + 6);
-      else if (k === ' ' || k === 'Enter') shoot(aim);
-      else return;
-      ev.preventDefault();
-    };
-    canvas.addEventListener('pointermove', onMove);
-    canvas.addEventListener('pointerdown', onDown);
-    window.addEventListener('keydown', onKey);
-    function cleanup() {
-      canvas.removeEventListener('pointermove', onMove);
-      canvas.removeEventListener('pointerdown', onDown);
-      window.removeEventListener('keydown', onKey);
-    }
-    function end() {
-      if (over) return;
-      over = true;
-      cleanup();
-      const r = OT.finishHunt(G, fired, kills);
-      renderStatus();
-      setAnim(sceneFor());
-      dialog(r.msg, () => (G.status === 'dead' ? gameOver() : back()));
-    }
-    hud('Hunting', '');
-    updateInfo();
-    panel(
-      h('h2', null, 'Hunting'),
-      h('p', null, 'Tap or click an animal to shoot. On a keyboard, aim with the arrow keys and fire with Space.'),
-      info,
-      h('div', { class: 'row' }, btn('Stop hunting', end, { primary: true })),
-    );
-    for (let i = 0; i < 3; i++) spawn();
-    setAnim((f) => {
-      if (!over) {
-        timeLeft--;
-        if (f % 60 === 0) updateInfo();
-        if (timeLeft <= 0) end();
-        if (rng.chance(0.012) && animals.filter((a) => !a.dead).length < 5) spawn();
-        for (const a of animals) a.x += a.vx;
-        for (let i = animals.length - 1; i >= 0; i--) if (!animals[i].dead && (animals[i].x < -40 || animals[i].x > Art.W + 40)) animals.splice(i, 1);
-      }
-      for (let i = flashes.length - 1; i >= 0; i--) if (--flashes[i].t <= 0) flashes.splice(i, 1);
-      Art.huntScene(ctx, { zone, brush, animals, flashes, aim, frame: f });
+      upd();
+      for (let i = 0; i < 3; i++) spawn();
+      picture((f) => {
+        if (!over) {
+          timeLeft--;
+          if (f % 30 === 0) upd();
+          if (timeLeft <= 0) end();
+          if (rng.chance(0.012) && animals.filter((a) => !a.dead).length < 5) spawn();
+          for (const a of animals) a.x += a.vx;
+          for (let i = animals.length - 1; i >= 0; i--) if (!animals[i].dead && (animals[i].x < -40 || animals[i].x > Art.W + 40)) animals.splice(i, 1);
+        }
+        for (let i = flashes.length - 1; i >= 0; i--) if (--flashes[i].t <= 0) flashes.splice(i, 1);
+        Art.huntScene(ctx, { zone, brush, animals, flashes, aim, frame: f });
+      });
     });
   }
 
-  // ---------- Rafting mini-game ----------
-  function raftIntro() {
-    panel(
-      h('h2', null, 'Rafting the Columbia'),
-      h('p', null, 'Steer left and right to miss the rocks. Use the arrow keys, drag on the river, or the buttons below on a phone. It lasts about 40 seconds.'),
-      h('div', { class: 'row' }, btn('Push off', raft, { primary: true }), btn('Back', dallesMenu)),
-    );
-  }
-
-  function raft() {
-    const rng = OT.makeRng(G.day * 17 + 99);
-    const rocks = [];
-    let raftX = 160, vx = 0, hits = 0, hitFlash = 0, scroll = 0, t = 0, over = false;
-    const dur = 40 * 60;
-    const keys = {};
-    const info = h('p', { class: 'muted', 'aria-live': 'polite' });
-    const upd = () => { info.textContent = `Hits: ${hits} · ${Math.max(0, Math.ceil((dur - t) / 60))}s to go`; };
-    const onKey = (ev) => { if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') { keys[ev.key] = ev.type === 'keydown'; ev.preventDefault(); } };
-    let dragX = null;
-    const onDown = (ev) => { const r = canvas.getBoundingClientRect(); dragX = (ev.clientX - r.left) / r.width * Art.W; };
-    const onMove = (ev) => { if (dragX == null) return; const r = canvas.getBoundingClientRect(); dragX = (ev.clientX - r.left) / r.width * Art.W; };
-    const onUp = () => { dragX = null; };
-    window.addEventListener('keydown', onKey); window.addEventListener('keyup', onKey);
-    canvas.addEventListener('pointerdown', onDown); canvas.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp);
-    const hold = (dir) => { const b = btn(dir < 0 ? '◀' : '▶', () => {}); const on = () => (keys[dir < 0 ? 'ArrowLeft' : 'ArrowRight'] = true); const off = () => (keys[dir < 0 ? 'ArrowLeft' : 'ArrowRight'] = false); b.addEventListener('pointerdown', on); b.addEventListener('pointerup', off); b.addEventListener('pointerleave', off); return b; };
-    panel(h('h2', null, 'On the river'), info, h('div', { class: 'touchpad' }, hold(-1), hold(1)));
-    hud('The Columbia River', '');
-    function end() {
-      over = true;
-      window.removeEventListener('keydown', onKey); window.removeEventListener('keyup', onKey);
-      canvas.removeEventListener('pointerdown', onDown); canvas.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp);
-      const r = OT.finishRaft(G, hits);
-      renderStatus();
-      dialog(r.msgs, () => (G.status === 'dead' ? gameOver() : finish()));
-    }
-    setAnim((f) => {
-      if (!over) {
-        t++;
-        if (f % 20 === 0) upd();
-        if (t > dur) return end();
-        const speed = 1.2 + t / dur * 1.3;
-        scroll += speed;
-        if (rng.chance(0.028 + t / dur * 0.02)) rocks.push({ x: 56 + rng() * 208, y: -10, r: rng.int(5, 10) });
-        for (const r of rocks) r.y += speed;
-        for (let i = rocks.length - 1; i >= 0; i--) if (rocks[i].y > Art.H + 20) rocks.splice(i, 1);
-        let target = 0;
-        if (keys.ArrowLeft) target -= 2.2;
-        if (keys.ArrowRight) target += 2.2;
-        if (dragX != null) target = Math.max(-2.2, Math.min(2.2, (dragX - raftX) * 0.12));
-        vx += (target - vx) * 0.25;
-        raftX = Math.max(58, Math.min(Art.W - 58, raftX + vx));
-        if (hitFlash > 0) hitFlash--;
-        else for (const r of rocks) {
-          if (Math.abs(r.x - raftX) < r.r + 12 && Math.abs(r.y - 139) < r.r / 2 + 7) { hits++; hitFlash = 50; Sound.bad(); upd(); break; }
+  // ---------- Rafting ----------
+  async function raft() {
+    T.clear();
+    T.say('You build a raft and load the wagon onto it.');
+    T.blank();
+    T.say(coarse ? 'Hold the left or right side of the picture to steer around the rocks.' : 'Steer with the LEFT and RIGHT arrow keys, or hold the mouse on either side of the picture.');
+    T.blank();
+    await pause('Press ENTER to push off');
+    const hits = await new Promise((resolve) => {
+      const rng = OT.makeRng(G.day * 17 + 99);
+      const rocks = [];
+      let raftX = Art.W / 2, vx = 0, hits = 0, hitFlash = 0, scroll = 0, t = 0, over = false;
+      const dur = FAST ? 60 : 40 * 60;
+      const keys = {};
+      T.clear();
+      T.say('THE COLUMBIA RIVER', 'inv');
+      const info = T.line('');
+      const upd = () => { info.textContent = `Rocks hit: ${hits}   ${Math.max(0, Math.ceil((dur - t) / 60))}s to go`; };
+      const onKey = (ev) => { if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') { keys[ev.key] = ev.type === 'keydown'; ev.preventDefault(); } };
+      let hold = 0;
+      const onDown = (ev) => { const r = canvas.getBoundingClientRect(); hold = (ev.clientX - r.left) < r.width / 2 ? -1 : 1; };
+      const onUp = () => { hold = 0; };
+      window.addEventListener('keydown', onKey); window.addEventListener('keyup', onKey);
+      canvas.addEventListener('pointerdown', onDown); window.addEventListener('pointerup', onUp); canvas.addEventListener('pointerleave', onUp);
+      upd();
+      picture((f) => {
+        if (!over) {
+          t++;
+          if (f % 20 === 0) upd();
+          if (t > dur) {
+            over = true;
+            window.removeEventListener('keydown', onKey); window.removeEventListener('keyup', onKey);
+            canvas.removeEventListener('pointerdown', onDown); window.removeEventListener('pointerup', onUp); canvas.removeEventListener('pointerleave', onUp);
+            resolve(hits);
+          }
+          const speed = 1.2 + (t / dur) * 1.3;
+          scroll += speed;
+          if (rng.chance(0.028 + (t / dur) * 0.02)) rocks.push({ x: 56 + rng() * (Art.W - 112), y: -10, r: rng.int(5, 10) });
+          for (const r of rocks) r.y += speed;
+          for (let i = rocks.length - 1; i >= 0; i--) if (rocks[i].y > Art.H + 20) rocks.splice(i, 1);
+          let target = 0;
+          if (keys.ArrowLeft || hold < 0) target -= 2.2;
+          if (keys.ArrowRight || hold > 0) target += 2.2;
+          vx += (target - vx) * 0.25;
+          raftX = Math.max(58, Math.min(Art.W - 58, raftX + vx));
+          if (hitFlash > 0) hitFlash--;
+          else for (const r of rocks) if (Math.abs(r.x - raftX) < r.r + 12 && Math.abs(r.y - 139) < r.r / 2 + 7) { hits++; hitFlash = 50; Sound.bad(); upd(); break; }
         }
-      }
-      Art.raftScene(ctx, { rocks, raftX, scroll, hitFlash, frame: f });
+        Art.raftScene(ctx, { rocks, raftX, scroll, hitFlash, frame: f });
+      });
     });
-    upd();
+    const r = OT.finishRaft(G, hits);
+    T.clear();
+    r.msgs.forEach((m) => T.say(m));
+    T.blank();
+    await pause();
+    return G.status === 'dead' ? gameOver() : finish();
   }
 
   // ---------- Endings ----------
-  function finish() {
-    stopTravel();
+  async function finish() {
     store.del('save');
-    renderStatus();
     Sound.win();
-    setAnim((f) => Art.landmarkScene(ctx, { id: 'willamette', landmark: OT.LANDMARKS.willamette, weather: null, frame: f, oxen: G.oxen }));
-    hud('Willamette Valley, Oregon', '');
+    picture((f) => Art.landmarkScene(ctx, { id: 'willamette', landmark: OT.LANDMARKS.willamette, weather: null, frame: f, oxen: G.oxen }));
+    T.clear();
+    T.say('Congratulations! You have made it to Oregon! Let\'s see how many points you have received.');
+    T.blank();
+    await pause();
     const sc = OT.score(G);
-    const leader = G.party[0].name;
+    T.clear();
+    T.center('POINTS FOR ARRIVING IN OREGON');
+    T.rule();
+    for (const [k, c, p] of sc.rows) T.line(`${String(c).padStart(5)} ${k}`.slice(0, 32).padEnd(32) + String(p).padStart(8));
+    T.rule();
+    T.line('Subtotal'.padEnd(32) + String(sc.raw).padStart(8));
+    T.line(`Bonus for ${OT.occupation(G).name.replace('Be a ', '').split(' from')[0]} x${sc.bonus}`.padEnd(32) + String(sc.total).padStart(8), 'inv');
+    T.blank();
+    T.say(`You arrived on ${OT.dateString(G)} after ${G.milesTraveled} miles. Rating: ${rating(sc.total)}.`);
+    T.art(WAGON);
     const top = store.get('top', []);
-    top.push({ name: leader, score: sc.total });
+    top.push({ name: G.party[0].name, score: sc.total });
     store.set('top', top.sort((a, b) => b.score - a.score).slice(0, 20));
-    panel(
-      h('div', { class: 'eyebrow' }, OT.dateString(G)),
-      h('h1', null, 'You made it to Oregon!'),
-      h('p', null, `${OT.alive(G).length} of 5 travelers arrived after ${G.day} days and ${G.milesTraveled} miles.`),
-      h('div', { class: 'scroll-x' }, h('table', { class: 'sheet' },
-        h('thead', null, h('tr', null, h('th', null, 'Item'), h('th', { class: 'n' }, 'Count'), h('th', { class: 'n' }, 'Points'))),
-        h('tbody', null,
-          sc.rows.map(([k, c, p]) => h('tr', null, h('td', null, k), h('td', { class: 'n' }, c), h('td', { class: 'n' }, p))),
-          h('tr', null, h('td', null, 'Subtotal'), h('td'), h('td', { class: 'n' }, sc.raw)),
-          h('tr', null, h('td', null, `Occupation bonus x${sc.bonus}`), h('td'), h('td', { class: 'n' }, h('b', null, sc.total)))))),
-      h('p', null, `Rating: ${rating(sc.total)}.`),
-      G.deaths.length ? h('p', { class: 'muted' }, 'Lost on the trail: ' + G.deaths.map((d) => `${d.name} (${d.cause})`).join(', ') + '.') : null,
-      h('div', { class: 'row' }, btn('See the Top Ten', topTen, { primary: true }), btn('Play again', title)),
-    );
+    T.blank();
+    await pause();
+    await topTen();
+    return title();
   }
 
-  function gameOver() {
-    stopTravel();
+  async function gameOver() {
     store.del('save');
-    renderStatus();
-    setAnim(sceneFor());
+    Sound.death();
+    picture(null);
     const leader = G.party[0];
-    const d = G.deaths.find((x) => x.name === leader.name) || G.deaths[G.deaths.length - 1] || { cause: 'the hardships of the trail', where: '', date: OT.dateString(G) };
-    const input = h('input', { id: 'epitaph', maxlength: 40, placeholder: 'Write an epitaph', autocomplete: 'off' });
-    const stone = h('div', { class: 'stone' }, h('b', null, 'Here lies ' + leader.name), h('p', { class: 'muted' }, d.date), h('p', { id: 'epitaph-line' }, ''));
-    panel(
-      h('h2', null, leader.alive ? 'Everyone in your party has died.' : `${leader.name}, your wagon leader, has died of ${d.cause}.`),
-      h('p', null, `The journey ended ${d.where ? d.where.toLowerCase().startsWith('near') ? d.where : 'at ' + d.where : 'on the trail'} after ${G.milesTraveled} miles.`),
-      h('div', { class: 'tomb' }, stone, h('div', { class: 'row epitaph' }, input, btn('Carve it', () => { $('#epitaph-line').textContent = input.value.trim(); }))),
-      h('div', { class: 'row' }, btn('Try again', title, { primary: true })),
-    );
+    const d = G.deaths.find((x) => x.name === leader.name) || G.deaths[G.deaths.length - 1] || { cause: 'the hardships of the trail', date: OT.dateString(G) };
+    T.clear();
+    T.say(leader.alive ? 'Everyone in your party has died.' : `${leader.name} has died of ${d.cause}.`);
+    T.blank();
+    T.art(tombstone(leader.name, '', d.date.replace(', 1848', '')));
+    T.blank();
+    const ep = await ask('Your epitaph: ', { maxLength: 24, forceFocus: true, placeholder: 'Type a line, ENTER' });
+    T.clear();
+    T.art(tombstone(leader.name, ep, d.date.replace(', 1848', '')));
+    T.blank();
+    T.say(`All the way to ${d.where || 'the trail'}. ${G.milesTraveled} miles.`, 'dim');
+    T.blank();
+    await pause();
+    return title();
   }
 
-  // ---------- chrome ----------
-  $('#mute').addEventListener('click', () => { Sound.unlock(); const m = Sound.toggle(); $('#mute').textContent = m ? '×' : '♪'; $('#mute').setAttribute('aria-label', m ? 'Sound off' : 'Sound on'); });
-
-  // Keep a game in progress when this page is updated while open.
+  // ---------- boot ----------
+  document.getElementById('mute').addEventListener('click', () => { Sound.unlock(); toggleSound(); });
   if (window.claude && window.claude.hot && window.claude.hot.snapshot) {
     try { window.claude.hot.snapshot(() => ({ G })); } catch (e) { /* optional */ }
   }
-  const start = (data) => { if (data && data.G) resume(data.G); else title(); };
+  const start = (data) => { if (data && data.G) { G = data.G; resume(); } else title(); };
   if (window.claude && window.claude.hot && window.claude.hot.ready) window.claude.hot.ready(start);
   else start(window.claude && window.claude.hot && window.claude.hot.data);
 
-  // Expose for automated checks.
   window.__TW = { get G() { return G; } };
 })();

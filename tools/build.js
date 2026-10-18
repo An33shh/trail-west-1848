@@ -10,7 +10,7 @@ const head = [
   '<meta name="claude:viewport-fit-sides" content="cover">',
   '<link rel="preconnect" href="https://fonts.googleapis.com">',
   '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>',
-  '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Pixelify+Sans:wght@400;500&display=swap">',
+  '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=VT323&display=swap">',
   `<style>\n${read('style.css')}</style>`,
 ].join('\n');
 const scripts = ['engine.js', 'art.js', 'audio.js', 'ui.js'].map((f) => `<script>\n${read(f)}</script>`).join('\n');

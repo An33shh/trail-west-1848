@@ -1,6 +1,6 @@
 # Mechanics Spec
 
-Clean-room specification for a remake of the 1992 color Macintosh release, The Oregon Trail (Deluxe). Written from public, documented descriptions of how the game plays. No original code, art, sound, or text was used. Every number marked **(tunable)** is an estimate chosen to match documented behavior and should be adjusted against real gameplay observation.
+Clean-room specification for a green-screen remake that follows the 1985 Apple II rules of The Oregon Trail, plus the typed shootout from the 1978 text version. Written from public, documented descriptions of how the game plays. No original code, art, sound, or text was used. Every number marked **(tunable)** is an estimate chosen to match documented behavior and should be adjusted against real gameplay observation.
 
 ## Rules for this repo
 
@@ -16,18 +16,17 @@ Clean-room specification for a remake of the 1992 color Macintosh release, The O
 
 ## Occupations
 
-Documented: score bonus by occupation, and skill perks for Doctor, Blacksmith, Carpenter, Farmer. Starting cash beyond Banker/Carpenter/Farmer is (tunable).
+Documented: starting cash and score multiplier are the only differences.
 
-| Occupation | Cash | Score x | Perk |
-|---|---|---|---|
-| Banker | $1600 | 1.0 | none |
-| Doctor | $1200 | 1.0 | sick members recover faster, fewer deaths |
-| Merchant | $1400 | 1.5 | none |
-| Blacksmith | $1100 | 2.0 | better odds repairing broken parts |
-| Carpenter | $800 | 2.0 | better odds repairing broken parts |
-| Saddlemaker | $900 | 2.5 | none |
-| Farmer | $400 | 3.0 | oxen less likely to be injured or die |
-| Teacher | $400 | 3.5 | none |
+| Occupation | Cash | Score x |
+|---|---|---|
+| Banker from Boston | $1600 | 1 |
+| Carpenter from Ohio | $800 | 2 |
+| Farmer from Illinois | $400 | 3 |
+
+## Riders (from the 1978 text game)
+
+Rare event, likelier on the plains. The player presses ENTER when ready, then types the word shown (BANG, BLAM, POW or WHAM). Under 1.5 s: riders flee. Under 3.5 s: driven off, may lose some food. Slower or mistyped: wagon raided, a traveler may be shot. Costs up to half a box of bullets.
 
 ## Supplies
 
@@ -114,7 +113,7 @@ Failure outcomes: lose supplies, wagon stuck in mud (lose a day), member drowned
 
 ## Hunting
 
-Mouse/touch aim shooter. Animals by zone: bison, deer, elk, antelope, bear, rabbit, squirrel. Each shot costs one bullet. Max 100 lb carried back per hunt. Over-hunting an area is not modeled (tunable).
+Mouse, touch or arrow-key aim shooter. Animals by zone: bison, deer, elk, antelope, bear, rabbit, squirrel. Each shot costs one bullet. Max 100 lb carried back per hunt (documented). Over-hunting an area is not modeled (tunable).
 
 ## Trading
 
