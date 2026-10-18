@@ -1,8 +1,10 @@
 # Trail West 1848
 
-A clean-room browser remake of The Oregon Trail as it was played on green monochrome screens: the 1985 Apple II game's landmarks, store, rivers and hunting, shown as 1-bit green hi-res pictures above a 40-column text terminal where you type your choices. It also brings back the 1978 text game's shootout, where you type BANG as fast as you can. Private fan project.
+A clean-room browser remake of The Oregon Trail as it was played on green monochrome screens: the 1985 Apple II game's landmarks, store, rivers and hunting, shown as 1-bit green hi-res pictures above a 40-column text terminal where you type your choices. It also brings back the 1978 text game's shootout, where you type BANG as fast as you can. Unofficial fan project.
 
 Play: open `dist/index.html` in any modern browser. No server, no install.
+
+Deploys: GitHub Pages via `.github/workflows/pages.yml`; Netlify via `netlify.toml` (publish directory `dist`, no build).
 
 ## What's in the game
 
@@ -67,4 +69,8 @@ Observing the original running in an emulator (AppleWin or another Apple II emul
 
 ## Legal
 
-The Oregon Trail is a trademark of its owner. This project is not affiliated with or endorsed by them, uses a different name in-game, and contains no original assets. Keep the repository private.
+The Oregon Trail is a trademark of its owner. This is an unofficial fan project, not affiliated with or endorsed by them. It uses its own name and contains no original code, art, sound or text from any commercial release.
+
+## License
+
+Code: MIT. See `LICENSE`.
