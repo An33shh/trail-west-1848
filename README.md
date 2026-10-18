@@ -56,14 +56,14 @@ python3 test/ui_playthrough.py      # end-to-end browser test (needs playwright 
 
 ## Accuracy work still open
 
-The values most likely to differ from the 1992 release, in priority order:
+The values most likely to differ from the 1985 Apple II release, in priority order:
 
 1. Segment mileages and fort price markups
 2. Event probabilities and the health curve
 3. River depth ranges per crossing and ford/caulk failure odds
 4. Barlow Road toll and duration
 
-Observing the original running in an emulator (Basilisk II or Mini vMac with your own copy) and logging numbers per playthrough is the fastest way to close these.
+Observing the original running in an emulator (AppleWin or another Apple II emulator, with your own copy) and logging numbers per playthrough is the fastest way to close these.
 
 ## Legal
 
