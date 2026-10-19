@@ -48,7 +48,7 @@
     probe.textContent = 'M'.repeat(COLS);
     probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;font-size:100px;font-family:inherit';
     termEl.append(probe);
-    const per100 = probe.getBoundingClientRect().width;
+    const per100 = probe.offsetWidth; // layout width, so the desktop 2x stretch doesn't skew it
     probe.remove();
     const avail = termEl.clientWidth;
     if (per100 > 0 && avail > 0) termEl.style.fontSize = Math.floor((avail / per100) * 100 * 0.995 * 10) / 10 + 'px';

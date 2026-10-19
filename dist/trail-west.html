@@ -126,6 +126,63 @@ body {
 .led { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--phos); box-shadow: 0 0 6px var(--phos); margin-right: 8px; vertical-align: middle; }
 
 @media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
+
+/* Full-screen CRT for desktops and other landscape screens: the window is the glass.
+   Like an Apple II, the screen is a 4:3 area as tall as the window holding 40 columns x about 24 rows.
+   VT323 is half as wide as Apple II 40-column text, so the terminal is laid out at half width and
+   stretched 2x. The picture shrinks to make room for long menus; anything longer scrolls in the glass. */
+@media (orientation: landscape) and (min-width: 900px) and (min-height: 500px) {
+  :root {
+    --pad: 3dvh;
+    --sw: min(100vw - 2 * var(--pad), (100dvh - 2 * var(--pad)) * 4 / 3);
+  }
+  html, body { background: var(--glass); overflow: hidden; }
+  .room { padding: 0; height: 100dvh; display: block; }
+  .monitor {
+    max-width: none; height: 100%; padding: 0;
+    background: none; border-radius: 0; box-shadow: none;
+  }
+  .glass {
+    height: 100%; box-sizing: border-box; border-radius: 0; background: none; box-shadow: none;
+    display: flex; flex-direction: column; align-items: flex-start;
+    overflow-y: auto; scrollbar-width: none; overscroll-behavior: contain;
+    padding: var(--pad) calc((100vw - var(--sw)) / 2) max(var(--pad), 48px);
+  }
+  .glass::-webkit-scrollbar { display: none; }
+  #scene {
+    flex: 0 1 calc(var(--sw) * 160 / 280);
+    min-height: 28%;
+    width: auto; max-width: 100%;
+    align-self: center;
+  }
+  .term {
+    flex: none;
+    width: calc(var(--sw) / 2);
+    min-height: 0;
+    margin-top: 0.4em;
+    transform: scaleX(2);
+    transform-origin: 0 0;
+    text-shadow: 0.5px 0 3px rgba(64, 255, 96, 0.6);
+  }
+  /* Tube: scanlines, phosphor bloom in the middle, dark rounded edges. Fixed, so it stays put while text scrolls. */
+  .glass::after {
+    position: fixed; z-index: 1;
+    background:
+      repeating-linear-gradient(to bottom, rgba(0, 0, 0, 0.3) 0 1px, transparent 1px 3px),
+      radial-gradient(ellipse at center, rgba(64, 255, 96, 0.04) 0%, transparent 55%, rgba(0, 0, 0, 0.55) 100%);
+    box-shadow: inset 0 0 6vmin 2vmin rgba(0, 0, 0, 0.85);
+    border-radius: 3vmin;
+  }
+  .under {
+    position: fixed; z-index: 2; right: 2.5vmin; bottom: 2vmin; margin: 0;
+    opacity: 0.35; transition: opacity 0.2s;
+  }
+  .under:hover, .under:focus-within { opacity: 1; }
+  .under > span:first-child { display: none; }
+  .under button { color: var(--phos); background: var(--glass); border-color: var(--phos-dim); }
+}
+/* In true full screen, drop the controls further out of the way. */
+:fullscreen .under { opacity: 0.15; }
 </style>
 <div class="room">
   <main class="monitor" aria-label="Trail West 1848">
@@ -137,6 +194,7 @@ body {
       <span><span class="led" aria-hidden="true"></span>TRAIL WEST 1848</span>
       <span class="buttons">
         <button id="install" type="button" hidden>INSTALL</button>
+        <button id="fullscreen" type="button" hidden>FULL SCREEN</button>
         <button id="mute" type="button">SOUND ON</button>
       </span>
     </div>
@@ -1546,7 +1604,7 @@ body {
     probe.textContent = 'M'.repeat(COLS);
     probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;font-size:100px;font-family:inherit';
     termEl.append(probe);
-    const per100 = probe.getBoundingClientRect().width;
+    const per100 = probe.offsetWidth; // layout width, so the desktop 2x stretch doesn't skew it
     probe.remove();
     const avail = termEl.clientWidth;
     if (per100 > 0 && avail > 0) termEl.style.fontSize = Math.floor((avail / per100) * 100 * 0.995 * 10) / 10 + 'px';
@@ -2615,5 +2673,20 @@ body {
   else start(window.claude && window.claude.hot && window.claude.hot.data);
 
   window.__TW = { get G() { return G; } };
+})();
+</script>
+<script>
+// FULL SCREEN button: hides the browser or app window frame so the screen is all glass.
+// Hidden where the browser can't do it (iPhone Safari, sandboxed frames).
+(() => {
+  const button = document.getElementById('fullscreen');
+  if (!button || !document.fullscreenEnabled) return;
+  button.hidden = false;
+  const label = () => { button.textContent = document.fullscreenElement ? 'EXIT FULL SCREEN' : 'FULL SCREEN'; };
+  button.addEventListener('click', () => {
+    const done = document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+    Promise.resolve(done).catch(() => { /* refused: stay windowed */ });
+  });
+  document.addEventListener('fullscreenchange', label);
 })();
 </script>

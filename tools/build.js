@@ -33,7 +33,7 @@ const appHead = [
   '<meta name="apple-mobile-web-app-status-bar-style" content="black">',
   '<meta name="apple-mobile-web-app-title" content="Trail West">',
 ].join('\n');
-const scripts = ['engine.js', 'art.js', 'audio.js', 'ui.js'].map((f) => `<script>\n${read(f)}</script>`).join('\n');
+const scripts = ['engine.js', 'art.js', 'audio.js', 'ui.js', 'fullscreen.js'].map((f) => `<script>\n${read(f)}</script>`).join('\n');
 const fragment = `${head}\n${read('body.html')}\n${scripts}\n`;
 const full = `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n${head}\n${appHead}\n</head>\n<body>\n${read('body.html')}\n${scripts}\n<script>\n${read('pwa.js')}</script>\n</body>\n</html>\n`;
 

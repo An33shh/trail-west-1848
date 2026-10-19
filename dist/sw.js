@@ -1,6 +1,6 @@
 // Offline support. tools/build.js fills in VERSION (a hash of the built files) and ASSETS,
 // so every rebuild that changes the game installs a fresh cache and drops the old one.
-const VERSION = "5da990d764be";
+const VERSION = "0dffdffd4080";
 const ASSETS = ["./","index.html","manifest.webmanifest","icons/icon-192.png","icons/icon-512.png","icons/icon-maskable-512.png","icons/apple-touch-icon.png"];
 const CACHE = 'tw1848-' + VERSION;
 const FONT_CACHE = 'tw1848-fonts';

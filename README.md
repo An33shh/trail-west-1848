@@ -12,6 +12,8 @@ The hosted game is a Progressive Web App. Install it once and it runs in its own
 - **Android (Chrome):** tap INSTALL, or the menu, then Install app.
 - **iPhone and iPad (Safari):** tap Share, then Add to Home Screen.
 
+On a computer (or any landscape screen) the whole window becomes the green screen, 40 columns across like an Apple II monitor; FULL SCREEN in the corner hides the window frame too. Phones in portrait show the monitor on a desk.
+
 Saves stay on the device. A new version downloads in the background and shows up the next time you open the game.
 
 Deploys: GitHub Pages via `.github/workflows/pages.yml`; Netlify via `netlify.toml` (publish directory `dist`, no build).
