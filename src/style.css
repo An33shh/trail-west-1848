@@ -114,6 +114,8 @@ body {
   font: inherit; color: #c9cbb8; background: #1b1c18; border: 1px solid #45463d; border-radius: 4px;
   padding: 4px 10px; cursor: pointer; letter-spacing: 0.08em;
 }
+.under .buttons { display: flex; gap: 8px; }
+.under button[hidden] { display: none; }
 .under button:focus-visible { outline: 2px solid var(--phos); outline-offset: 2px; }
 .led { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--phos); box-shadow: 0 0 6px var(--phos); margin-right: 8px; vertical-align: middle; }
 

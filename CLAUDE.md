@@ -7,6 +7,7 @@ Green-screen browser remake of the 1985 Oregon Trail. Plain JS, no dependencies,
 - Build: `node tools/build.js` (writes `dist/index.html` and `dist/trail-west.html`; commit `dist/`)
 - Balance sim: `node test/sim.js 400 steady` and `node test/sim.js 400 reckless` (must print `errors: 0`)
 - Browser playthrough: `python3 test/ui_playthrough.py test/out 480 1` (needs Python Playwright + Chromium)
+- PWA check: `python3 test/pwa_check.py` (installable, service worker, offline start, font cached; `PW_CHANNEL=chrome` to use installed Chrome)
 - Publish (GitHub public repo + Pages + Netlify): follow `PUBLISH.md`, which runs `bash tools/publish.sh`
 
 ## Layout

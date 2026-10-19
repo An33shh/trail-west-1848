@@ -4,6 +4,16 @@ A clean-room browser remake of The Oregon Trail as it was played on green monoch
 
 Play: open `dist/index.html` in any modern browser. No server, no install.
 
+## Install as an app (plays offline)
+
+The hosted game is a Progressive Web App. Install it once and it runs in its own window with no internet:
+
+- **Desktop (Chrome, Edge):** click INSTALL under the screen, or the install icon in the address bar.
+- **Android (Chrome):** tap INSTALL, or the menu, then Install app.
+- **iPhone and iPad (Safari):** tap Share, then Add to Home Screen.
+
+Saves stay on the device. A new version downloads in the background and shows up the next time you open the game.
+
 Deploys: GitHub Pages via `.github/workflows/pages.yml`; Netlify via `netlify.toml` (publish directory `dist`, no build).
 
 ## What's in the game
@@ -34,10 +44,14 @@ src/audio.js            square-wave sound and original tunes
 src/ui.js               40-column terminal, typed menus, mini-games
 src/style.css           monitor bezel, phosphor glow, scanlines
 src/body.html           page markup
-tools/build.js          bundles src/ into dist/
+src/pwa.js              registers the service worker, INSTALL button
+src/sw.js               offline cache (build fills in version and file list)
+tools/build.js          bundles src/ into dist/, writes manifest, icons, service worker
+tools/icons.js          draws the app icons as PNGs, no dependencies
 dist/index.html         playable single file
 test/sim.js             headless balance simulation
 test/ui_playthrough.py  full playthrough in headless Chromium
+test/pwa_check.py       installability and offline check in headless Chromium
 ```
 
 ## Commands
@@ -47,6 +61,7 @@ node tools/build.js                 # rebuild dist/
 node test/sim.js 400 steady         # balance: careful play
 node test/sim.js 400 reckless       # balance: grueling pace, bare-bones rations
 python3 test/ui_playthrough.py      # end-to-end browser test (needs playwright + chromium)
+python3 test/pwa_check.py           # installable + offline check (PW_CHANNEL=chrome to use installed Chrome)
 ```
 
 ## Clean-room rules

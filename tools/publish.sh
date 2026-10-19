@@ -56,7 +56,7 @@ echo "== Netlify: $SITE_NAME"
 if [ ! -f .netlify/state.json ]; then
   TEAM_ARGS=()
   [ -n "${NETLIFY_TEAM:-}" ] && TEAM_ARGS=(--account-slug "$NETLIFY_TEAM")
-  if ! netlify sites:create --name "$SITE_NAME" "${TEAM_ARGS[@]}"; then
+  if ! netlify sites:create --name "$SITE_NAME" ${TEAM_ARGS[@]+"${TEAM_ARGS[@]}"}; then
     echo "Site name '$SITE_NAME' may be taken. Rerun with SITE_NAME=<another-name>." >&2
     exit 1
   fi
