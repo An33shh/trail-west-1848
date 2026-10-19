@@ -2361,7 +2361,8 @@ body {
       if (G.status === 'won') return finish();
       if (G.status === 'river') return river();
       if (G.status === 'dalles') return dalles();
-      landmarkPicture(G.at);
+      // As in the 1985 release: the picture shows on arrival, the stop's menu is a text page.
+      picture(null);
       autosave();
       T.clear();
       T.line(lm.name, 'inv');
@@ -2395,7 +2396,7 @@ body {
       T.say('The trail divides here. You may:');
       T.blank();
       const c = await choose([...lm.fork.map((f, i) => `${f} (${lm.dist[i]} mi)`), 'See the map']);
-      if (c === lm.fork.length) { await map(); landmarkPicture(G.at); continue; }
+      if (c === lm.fork.length) { await map(); picture(null); continue; }
       OT.depart(G, c);
       return travel();
     }
